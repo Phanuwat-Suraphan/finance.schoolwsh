@@ -546,7 +546,7 @@ function createEnv(options) {
     },
     /** จำลองการเริ่มทำงานรอบใหม่ของ Apps Script (ล้างตัวแปรในหน่วยความจำ) */
     newExecution() {
-      vm.runInContext('DB_SPREADSHEET_ = null; DB_TABLES_ = Object.create(null); AUDIT_STATE_ = null; ISSUED_IDS_ = Object.create(null);', context);
+      vm.runInContext('DB_SPREADSHEET_ = null; DB_TABLES_ = Object.create(null); AUDIT_STATE_ = null; ISSUED_IDS_ = Object.create(null); RESERVED_IDS_ = Object.create(null);', context);
     },
     sheet(name) {
       const ss = env.activeSpreadsheet;

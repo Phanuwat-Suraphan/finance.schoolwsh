@@ -298,6 +298,24 @@ function dbFindOne_(name, predicate) {
 // API เขียนข้อมูล
 // ---------------------------------------------------------------------------
 
+/** รหัสที่จองไว้ด้วย dbReserveId_() แต่ยังไม่ได้บันทึก (ล้างเมื่อเริ่มคำขอใหม่) */
+let RESERVED_IDS_ = Object.create(null);
+
+/**
+ * จองรหัสอ้างอิงล่วงหน้า สำหรับรายการ 2 ชีตที่ต้องอ้างถึงกันตั้งแต่บันทึกครั้งแรก
+ * เช่น การรับเงินกับทะเบียนคุมเลขที่ใบเสร็จ (ต้องถือ lock อยู่)
+ */
+function dbReserveId_(name) {
+  assertLockHeld_();
+  const table = dbTable_(name);
+  const schema = table.schema;
+  if (!schema.idPrefix) throw appError_(ERROR_CODES.INTERNAL, 'ข้อผิดพลาดของโปรแกรม: ชีต ' + name + ' ไม่มีรหัสอัตโนมัติ');
+  let id = newId_(schema.idPrefix);
+  while (table.idIndex[id] !== undefined || RESERVED_IDS_[id]) id = newId_(schema.idPrefix);
+  RESERVED_IDS_[id] = name;
+  return id;
+}
+
 /** เพิ่ม 1 รายการ คืนค่ารายการที่บันทึกแล้ว (มีรหัสอ้างอิงและเวลาที่สร้าง) */
 function dbInsert_(name, record, actor, options) {
   return dbInsertMany_(name, [record], actor, options)[0];
@@ -332,10 +350,14 @@ function dbInsertMany_(name, records, actor, options) {
     const rec = {};
     schema.columns.forEach(function (col) { rec[col.name] = coerceValue_(col, input[col.name], name); });
 
-    if (schema.idPrefix) {
-      if (rec[schema.idColumn]) throw appError_(ERROR_CODES.INTERNAL, 'ข้อผิดพลาดของโปรแกรม: ห้ามกำหนด ' + schema.idColumn + ' เอง');
+    if (schema.idPrefix && rec[schema.idColumn]) {
+      // กำหนดรหัสเองได้เฉพาะรหัสที่จองด้วย dbReserveId_() สำหรับชีตนี้
+      if (RESERVED_IDS_[rec[schema.idColumn]] !== name) {
+        throw appError_(ERROR_CODES.INTERNAL, 'ข้อผิดพลาดของโปรแกรม: ห้ามกำหนด ' + schema.idColumn + ' เอง');
+      }
+    } else if (schema.idPrefix) {
       let id = newId_(schema.idPrefix);
-      while (table.idIndex[id] !== undefined || batchIds[id]) id = newId_(schema.idPrefix);
+      while (table.idIndex[id] !== undefined || batchIds[id] || RESERVED_IDS_[id]) id = newId_(schema.idPrefix);
       rec[schema.idColumn] = id;
     } else if (!rec[schema.idColumn]) {
       throw appError_(ERROR_CODES.INTERNAL, 'ข้อผิดพลาดของโปรแกรม: ต้องระบุ ' + schema.idColumn);
@@ -356,6 +378,7 @@ function dbInsertMany_(name, records, actor, options) {
 
   const startRow = table.lastRow + 1;
   writeRecordsAt_(table.sheet, table.header, schema, prepared, startRow);
+  prepared.forEach(function (rec) { delete RESERVED_IDS_[rec[schema.idColumn]]; });
   prepared.forEach(function (rec, i) {
     table.idIndex[rec[schema.idColumn]] = table.rows.length;
     table.rows.push({ rowNumber: startRow + i, record: rec });

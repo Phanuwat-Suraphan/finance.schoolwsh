@@ -19,6 +19,7 @@ const OUT_FILE = path.join(ROOT, 'dist', 'Code.gs');
  * ทุกไฟล์ไม่มีโค้ดระดับไฟล์ที่พึ่งไฟล์อื่น จึงเรียงลำดับใดก็ทำงานได้ (มีชุดทดสอบยืนยัน)
  */
 const ORDER = ['Setup.js', 'Code.js', 'Api.js', 'Auth.js', 'Users.js', 'Settings.js', 'Students.js', 'StudentImport.js',
+  'Ledger.js', 'Fees.js', 'Approvals.js', 'Receipts.js', 'Payments.js',
   'Config.js', 'Shared.js', 'Utils.js', 'Db.js', 'Audit.js'];
 
 function readAppInfo() {

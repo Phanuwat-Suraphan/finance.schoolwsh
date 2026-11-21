@@ -32,6 +32,8 @@ function apiActions_() {
   const OVERSIGHT = [ROLES.ADMIN, ROLES.DIRECTOR];
   const FINANCE = [ROLES.FINANCE];
   const STUDENT_VIEW = [ROLES.FINANCE, ROLES.DIRECTOR];
+  const FINANCE_VIEW = [ROLES.FINANCE, ROLES.DIRECTOR];
+  const DIRECTOR = [ROLES.DIRECTOR];
   API_ACTIONS_ = {
     // การเข้าสู่ระบบ
     'auth.login': { public: true, write: true, handler: authLogin_ },
@@ -65,6 +67,33 @@ function apiActions_() {
     'students.importCommit': { roles: FINANCE, write: true, handler: studentsImportCommit_ },
     'students.promotePreview': { roles: FINANCE, write: false, handler: studentsPromotePreview_ },
     'students.promoteCommit': { roles: FINANCE, write: true, handler: studentsPromoteCommit_ },
+    // อัตราเงินบำรุงและรายการเรียกเก็บ (ผู้ดูแลระบบไม่เห็นข้อมูลการเงิน)
+    'fees.list': { roles: FINANCE_VIEW, write: false, handler: feesList_ },
+    'fees.create': { roles: FINANCE, write: true, handler: feesCreate_ },
+    'fees.update': { roles: FINANCE, write: true, handler: feesUpdate_ },
+    'assessments.list': { roles: FINANCE_VIEW, write: false, handler: assessmentsList_ },
+    'assessments.preview': { roles: FINANCE, write: false, handler: assessmentsPreview_ },
+    'assessments.generate': { roles: FINANCE, write: true, handler: assessmentsGenerate_ },
+    'assessments.createOne': { roles: FINANCE, write: true, handler: assessmentsCreateOne_ },
+    'assessments.requestCancel': { roles: FINANCE, write: true, handler: assessmentsRequestCancel_ },
+    'adjustments.request': { roles: FINANCE, write: true, handler: adjustmentsRequest_ },
+    'adjustments.revoke': { roles: DIRECTOR, write: true, handler: adjustmentsRevoke_ },
+    // บัญชีการเงินของนักเรียน
+    'ledger.students': { roles: FINANCE_VIEW, write: false, handler: ledgerStudents_ },
+    'ledger.student': { roles: FINANCE_VIEW, write: false, handler: ledgerStudent_ },
+    // คำขออนุมัติ: เจ้าหน้าที่ยื่น/ถอน ผู้อำนวยการพิจารณา
+    'approvals.list': { roles: FINANCE_VIEW, write: false, handler: approvalsList_ },
+    'approvals.decide': { roles: DIRECTOR, write: true, handler: approvalsDecide_ },
+    'approvals.withdraw': { roles: FINANCE, write: true, handler: approvalsWithdraw_ },
+    // ทะเบียนเล่มใบเสร็จ
+    'receipts.books': { roles: FINANCE_VIEW, write: false, handler: receiptsBooks_ },
+    'receipts.registerBook': { roles: FINANCE, write: true, handler: receiptsRegisterBook_ },
+    'receipts.updateBook': { roles: FINANCE, write: true, handler: receiptsUpdateBook_ },
+    'receipts.activateBook': { roles: FINANCE, write: true, handler: receiptsActivateBook_ },
+    // รับชำระเงิน
+    'payments.context': { roles: FINANCE, write: false, handler: paymentsContext_ },
+    'payments.create': { roles: FINANCE, write: true, handler: paymentsCreate_ },
+    'payments.list': { roles: FINANCE_VIEW, write: false, handler: paymentsList_ },
   };
   Object.keys(API_ACTIONS_).forEach(function (k) { Object.freeze(API_ACTIONS_[k]); });
   Object.freeze(API_ACTIONS_);

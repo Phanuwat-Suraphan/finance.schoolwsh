@@ -332,6 +332,51 @@ function studentDisplayName_(prefix, firstName, lastName) {
   return lastName ? head + ' ' + lastName : head;
 }
 
+// ---------------------------------------------------------------------------
+// การเรียกเก็บและการรับชำระ (ระยะที่ 4)
+// ---------------------------------------------------------------------------
+
+/** ป้ายภาคเรียน เช่น ('1', 2569) → "ภาคเรียนที่ 1/2569" และ ('Y', 2569) → "ปีการศึกษา 2569" */
+function termLabel_(term, year) {
+  var t = String(term);
+  return t === 'Y' ? 'ปีการศึกษา ' + year : 'ภาคเรียนที่ ' + t + '/' + year;
+}
+
+/** ชื่อรายการเรียกเก็บ เช่น "เงินบำรุงการศึกษา ภาคเรียนที่ 1/2569 ชั้น ป.1" (ใช้เขียนในใบเสร็จ) */
+function feeItemLabel_(description, term, year, gradeLevel) {
+  var name = String(description || '').trim() || 'เงินบำรุงการศึกษา';
+  return name + ' ' + termLabel_(term, year) + (gradeLevel ? ' ชั้น ' + gradeLevel : '');
+}
+
+/**
+ * สถานะการชำระของรายการเรียกเก็บ ตรวจตามลำดับ:
+ * ยกเลิก → ได้รับยกเว้น (ยอดสุทธิ 0) → ยังไม่ชำระ → ชำระบางส่วน → ชำระครบ
+ */
+function payStateOf_(cancelled, netSatang, paidSatang) {
+  if (cancelled) return 'CANCELLED';
+  if (netSatang <= 0) return 'EXEMPT';
+  if (paidSatang <= 0) return 'UNPAID';
+  if (paidSatang < netSatang) return 'PARTIAL';
+  return 'PAID';
+}
+
+/**
+ * ตัดชำระตามลำดับรายการที่ส่งมา (เรียงหนี้เก่าก่อนแล้ว) จนเงินหมด
+ * items: [{ id, outstandingSatang }] → { allocations: [{ id, satang }], remainderSatang (เงินที่เกินยอดค้าง) }
+ */
+function autoAllocate_(items, amountSatang) {
+  var left = Math.max(0, Math.round(Number(amountSatang) || 0));
+  var out = [];
+  for (var i = 0; i < items.length && left > 0; i++) {
+    var take = Math.min(left, Math.max(0, Math.round(Number(items[i].outstandingSatang) || 0)));
+    if (take > 0) {
+      out.push({ id: items[i].id, satang: take });
+      left -= take;
+    }
+  }
+  return { allocations: out, remainderSatang: left };
+}
+
 /** รายชื่อฟังก์ชันที่จะคัดลอกไปใช้ในหน้าเว็บ */
 const SHARED_CLIENT_FUNCTIONS_ = [
   'isValidIsoDate_',
@@ -350,6 +395,10 @@ const SHARED_CLIENT_FUNCTIONS_ = [
   'normalizeGradeLevel_',
   'normalizeRoom_',
   'studentDisplayName_',
+  'termLabel_',
+  'feeItemLabel_',
+  'payStateOf_',
+  'autoAllocate_',
 ];
 
 /** ซอร์สโค้ดของฟังก์ชันที่ใช้ร่วมกัน สำหรับฝังลงในหน้าเว็บ (ระยะที่ 2) */
@@ -371,6 +420,10 @@ function sharedClientSource_() {
     normalizeGradeLevel_: normalizeGradeLevel_,
     normalizeRoom_: normalizeRoom_,
     studentDisplayName_: studentDisplayName_,
+    termLabel_: termLabel_,
+    feeItemLabel_: feeItemLabel_,
+    payStateOf_: payStateOf_,
+    autoAllocate_: autoAllocate_,
   };
   return SHARED_CLIENT_FUNCTIONS_.map(function (name) { return String(fns[name]); }).join('\n\n');
 }
