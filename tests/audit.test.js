@@ -31,11 +31,11 @@ test('ลูกโซ่ hash ถูกต้องหลังติดตั�
   const { h, g } = setup();
   let result = verify(h);
   assert.equal(result.ok, true);
-  assert.equal(result.total, 23 + 5);
+  assert.equal(result.total, 24 + 5);
   g.withScriptLock_(() => g.dbInsert_('Students', { StudentNo: 'B1', FirstName: 'ใหม่', Status: 'STUDYING' }, OFFICER));
   result = verify(h);
   assert.equal(result.ok, true);
-  assert.equal(result.total, 29);
+  assert.equal(result.total, 30);
 });
 
 test('แถวแรกต่อจาก GENESIS และทุกแถวอ้าง hash ของแถวก่อนหน้า', () => {
@@ -52,14 +52,15 @@ test('แถวแรกต่อจาก GENESIS และทุกแถว�
 test('ตรวจพบการแก้ไขข้อมูลในแถวประวัติด้วยมือ และกลับมาถูกต้องเมื่อคืนค่าเดิม', () => {
   const { h, audit } = setup();
   const noteCol = colOf(audit, 'AfterJson');
-  const original = audit.getRange(26, noteCol).getValue(); // แถว 26 = ประวัติการเพิ่มนักเรียน2
-  assert.match(original, /นักเรียน2/);
-  audit._rawSet(26, noteCol, original.replace('นักเรียน2', 'นักเรียนปลอม'));
+  let row = 2;
+  while (!/นักเรียน2/.test(audit.getRange(row, noteCol).getValue())) row++; // แถวประวัติการเพิ่มนักเรียน2
+  const original = audit.getRange(row, noteCol).getValue();
+  audit._rawSet(row, noteCol, original.replace('นักเรียน2', 'นักเรียนปลอม'));
   let result = verify(h);
   assert.equal(result.ok, false);
-  assert.deepEqual(result.problems.map((p) => [p.rowNumber, p.problem]), [[26, 'HASH_MISMATCH']]);
+  assert.deepEqual(result.problems.map((p) => [p.rowNumber, p.problem]), [[row, 'HASH_MISMATCH']]);
   assert.match(result.problems[0].label, /ถูกแก้ไข/);
-  audit._rawSet(26, noteCol, original);
+  audit._rawSet(row, noteCol, original);
   result = verify(h);
   assert.equal(result.ok, true);
 });

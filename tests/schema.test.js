@@ -77,15 +77,15 @@ test('จำนวนเงินที่บันทึกแล้วแก�
   assert.equal(h.gas.getSchema_('AuditLogs').writeVia, 'audit');
 });
 
-test('ค่าตั้งค่าเริ่มต้น: key ไม่ซ้ำ และค่าเริ่มต้นตรงกับข้อเสนอที่ตกลงกัน', () => {
+test('ค่าตั้งค่าเริ่มต้น: key ไม่ซ้ำ และค่าเริ่มต้นตรงกับการตัดสินใจใน docs/DECISIONS.md', () => {
   const defs = plain(h.run('SETTINGS_DEFS'));
   const keys = defs.map((d) => d.key);
   assert.equal(new Set(keys).size, keys.length);
   const byKey = Object.fromEntries(defs.map((d) => [d.key, d]));
   assert.equal(byKey.GRADE_LEVELS.defaultValue, 'อ.1,อ.2,อ.3,ป.1,ป.2,ป.3,ป.4,ป.5,ป.6');
-  ['APPROVAL_FEE_ADJUSTMENT', 'APPROVAL_ASSESSMENT_CANCEL', 'APPROVAL_RECEIPT_CANCEL', 'APPROVAL_PAYMENT_CORRECTION']
-    .forEach((k) => assert.equal(byKey[k].defaultValue, 'TRUE', k));
-  assert.equal(byKey.RECEIPT_STRICT_SEQUENCE.defaultValue, 'FALSE');
+  ['APPROVAL_FEE_ADJUSTMENT', 'APPROVAL_ASSESSMENT_CANCEL', 'APPROVAL_RECEIPT_CANCEL', 'APPROVAL_PAYMENT_CORRECTION', 'APPROVAL_BOOK_CLOSE']
+    .forEach((k) => assert.equal(byKey[k].defaultValue, 'TRUE', k + ' ต้องให้ผู้อำนวยการอนุมัติเป็นค่าเริ่มต้น'));
+  assert.equal(byKey.RECEIPT_STRICT_SEQUENCE.defaultValue, 'TRUE', 'ใช้ใบเสร็จเรียงเลขที่เคร่งครัดเป็นค่าเริ่มต้น');
   defs.forEach((d) => assert.ok(['text', 'int', 'bool', 'list', 'year'].includes(d.type), d.key));
 });
 

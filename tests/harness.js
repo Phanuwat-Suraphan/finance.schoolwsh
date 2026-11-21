@@ -512,11 +512,12 @@ function createEnv(options) {
   };
 
   const context = vm.createContext(globals);
-  const files = opts.files || listSourceFiles();
-  files.forEach((file) => {
-    const code = fs.readFileSync(path.join(SRC_DIR, file), 'utf8');
-    vm.runInContext(code, context, { filename: file });
-  });
+  // sources: [{ name, code }] ใช้ทดสอบไฟล์รวม dist/Code.gs / files: รายชื่อไฟล์ใน src/
+  const sources = opts.sources || (opts.files || listSourceFiles()).map((file) => ({
+    name: file,
+    code: fs.readFileSync(path.join(SRC_DIR, file), 'utf8'),
+  }));
+  sources.forEach((src) => vm.runInContext(src.code, context, { filename: src.name }));
 
   const harness = {
     env,

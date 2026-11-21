@@ -124,6 +124,14 @@ test('academicYearOfDate_ (พ.ค.–ธ.ค. = ปีเดียวกัน,
   assert.equal(g.academicYearOfDate_(''), null);
 });
 
+test('fiscalYearOfDate_ ปีงบประมาณ 1 ต.ค. – 30 ก.ย.', () => {
+  assert.equal(g.fiscalYearOfDate_('2026-10-01'), 2570);
+  assert.equal(g.fiscalYearOfDate_('2026-11-21'), 2570);
+  assert.equal(g.fiscalYearOfDate_('2026-09-30'), 2569);
+  assert.equal(g.fiscalYearOfDate_('2027-01-15'), 2570);
+  assert.equal(g.fiscalYearOfDate_(''), null);
+});
+
 test('sharedClientSource_ ใช้ในหน้าเว็บได้โดยไม่พึ่งบริการของ Apps Script', () => {
   const source = g.sharedClientSource_();
   const clean = vm.createContext({}); // ไม่มี SpreadsheetApp, Utilities หรือค่าคงที่ใด ๆ
@@ -133,4 +141,5 @@ test('sharedClientSource_ ใช้ในหน้าเว็บได้โด
   assert.equal(vm.runInContext('formatThaiDateTime_("2026-11-21 08:05:00")', clean), '21 พฤศจิกายน 2569 เวลา 08:05 น.');
   assert.equal(vm.runInContext('parseMoneyToSatang_("1,000").satang', clean), 100000);
   assert.equal(vm.runInContext('academicYearOfDate_("2026-11-21")', clean), 2569);
+  assert.equal(vm.runInContext('fiscalYearOfDate_("2026-11-21")', clean), 2570);
 });

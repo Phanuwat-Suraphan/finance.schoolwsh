@@ -3,8 +3,8 @@
  *  Setup.gs — ติดตั้งและตรวจสอบโครงสร้างฐานข้อมูล + เมนูใน Google Sheets
  * ----------------------------------------------------------------------------
  *  วิธีใช้ (เจ้าของระบบเท่านั้น)
- *   - เปิด Google Sheets → เมนู "ระบบเงินบำรุงการศึกษา" → "1) ติดตั้ง / ตรวจสอบโครงสร้างฐานข้อมูล"
- *   - หรือเลือกฟังก์ชัน SetupDatabase แล้วกด Run ใน Apps Script Editor
+ *   - ใน Apps Script Editor เลือกฟังก์ชัน SetupDatabase แล้วกด "เรียกใช้ (Run)"
+ *   - หรือเปิด Google Sheets → เมนู "ระบบเงินบำรุงการศึกษา" → "1) ติดตั้ง / ตรวจสอบโครงสร้างฐานข้อมูล"
  *
  *  SetupDatabase() รันซ้ำได้อย่างปลอดภัย
  *   - สร้างเฉพาะชีต คอลัมน์ และค่าตั้งค่าที่ยังไม่มี
@@ -14,6 +14,22 @@
  */
 
 const MENU_TITLE = 'ระบบเงินบำรุงการศึกษา';
+
+/**
+ * ติดตั้งหรือตรวจสอบโครงสร้างฐานข้อมูล (ชื่อฟังก์ชันตามข้อกำหนดของโครงการ)
+ * วางไว้เป็นฟังก์ชันแรกของไฟล์ เพื่อให้ถูกเลือกไว้ในช่อง "เรียกใช้ (Run)" ของ Apps Script Editor
+ * คืนค่ารายงานผล (ไม่มีข้อมูลลับ) และแสดงผลใน "บันทึกการดำเนินการ (Execution log)"
+ */
+function SetupDatabase() {
+  assertOwnerContext_();
+  const ss = resolveSetupSpreadsheet_();
+  dbUseSpreadsheet_(ss);
+  const report = withScriptLock_(function () {
+    return setupDatabase_(ss);
+  }, LIMITS.SETUP_LOCK_TIMEOUT_MS);
+  console.log('ผลการติดตั้งฐานข้อมูล\n' + formatSetupReport_(report));
+  return report;
+}
 
 /** เพิ่มเมนูเมื่อเปิดไฟล์ Google Sheets (simple trigger) */
 function onOpen() {
@@ -51,21 +67,6 @@ function menuVerifyAuditLog() {
   } catch (e) {
     ui.alert('ตรวจสอบไม่สำเร็จ', ownerErrorMessage_(e), ui.ButtonSet.OK);
   }
-}
-
-/**
- * ติดตั้งหรือตรวจสอบโครงสร้างฐานข้อมูล (ชื่อฟังก์ชันตามข้อกำหนดของโครงการ)
- * คืนค่ารายงานผล (ไม่มีข้อมูลลับ)
- */
-function SetupDatabase() {
-  assertOwnerContext_();
-  const ss = resolveSetupSpreadsheet_();
-  dbUseSpreadsheet_(ss);
-  const report = withScriptLock_(function () {
-    return setupDatabase_(ss);
-  }, LIMITS.SETUP_LOCK_TIMEOUT_MS);
-  console.log(formatSetupReport_(report));
-  return report;
 }
 
 /**

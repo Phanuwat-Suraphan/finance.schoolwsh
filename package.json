@@ -4,6 +4,7 @@
   "private": true,
   "description": "ระบบบริหารจัดเก็บเงินบำรุงการศึกษา โรงเรียนวัดเสาหิน (Google Apps Script) - ไฟล์นี้ใช้สำหรับรันชุดทดสอบบน Node.js เท่านั้น",
   "scripts": {
+    "build": "node scripts/build.js",
     "test": "node --test"
   },
   "engines": {

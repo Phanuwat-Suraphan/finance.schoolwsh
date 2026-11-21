@@ -43,12 +43,15 @@ test('หัวตาราง: ตรึงแถว มีคำอธิบ�
   assert.equal(sheet.getRange(500, 5).getNumberFormat(), '#,##0.00');
 });
 
-test('สร้างค่าตั้งค่าเริ่มต้น 22 รายการ และปีการศึกษาปัจจุบันคำนวณจากวันที่ติดตั้ง', () => {
+test('สร้างค่าตั้งค่าเริ่มต้นครบ และปีการศึกษาปัจจุบันคำนวณจากวันที่ติดตั้ง', () => {
   const h = freshEnv();
   h.gas.SetupDatabase();
   h.newExecution();
   const settings = Object.fromEntries(h.gas.dbAll_('SchoolSettings').map((r) => [r.SettingKey, r.Value]));
-  assert.equal(Object.keys(settings).length, 22);
+  assert.equal(Object.keys(settings).length, h.run('SETTINGS_DEFS.length'));
+  assert.equal(Object.keys(settings).length, 23);
+  assert.equal(settings.RECEIPT_STRICT_SEQUENCE, 'TRUE');
+  assert.equal(settings.APPROVAL_BOOK_CLOSE, 'TRUE');
   assert.equal(settings.SCHOOL_NAME, 'โรงเรียนวัดเสาหิน');
   assert.equal(settings.CURRENT_ACADEMIC_YEAR, '2569');
   assert.equal(settings.APPROVAL_RECEIPT_CANCEL, 'TRUE');
@@ -93,7 +96,7 @@ test('รันซ้ำได้อย่างปลอดภัย: ไม่
   assert.equal(h.env.props.get('PASSWORD_PEPPER'), pepper);
 
   h.newExecution();
-  assert.equal(h.gas.dbAll_('SchoolSettings').length, 22);
+  assert.equal(h.gas.dbAll_('SchoolSettings').length, 23);
   assert.equal(h.gas.dbGet_('SchoolSettings', 'SCHOOL_ADDRESS').Value, 'ต.ตัวอย่าง อ.ตัวอย่าง', 'ไม่เขียนทับค่าที่ตั้งไว้');
   assert.equal(h.gas.dbGet_('Students', saved.StudentId).FirstName, 'สมชาย');
   const verify = plain(h.gas.auditVerifyChain_());
@@ -203,7 +206,7 @@ test('เมนูใน Google Sheets: แสดงเมนู ยืนยั
 
   h.newExecution();
   h.gas.menuVerifyAuditLog();
-  assert.match(h.env.alerts[h.env.alerts.length - 1].message, /^ถูกต้อง: ประวัติการใช้งาน 23 รายการ/);
+  assert.match(h.env.alerts[h.env.alerts.length - 1].message, /^ถูกต้อง: ประวัติการใช้งาน 24 รายการ/);
 });
 
 test('เมนูแสดงข้อผิดพลาดเป็นข้อความภาษาไทยแทนการหยุดทำงาน', () => {

@@ -181,6 +181,17 @@ function academicYearOfDate_(iso) {
   return Number(m[2]) >= 5 ? be : be - 1;
 }
 
+/**
+ * ปีงบประมาณ (พ.ศ.) ของวันที่ ค.ศ. นับ 1 ตุลาคม – 30 กันยายน
+ * เช่น 2026-10-01 → 2570, 2026-09-30 → 2569 (ใช้กับทะเบียนคุมใบเสร็จและรายงานรับเงินรายปีงบประมาณ)
+ */
+function fiscalYearOfDate_(iso) {
+  var m = /^(\d{4})-(\d{2})/.exec(String(iso === null || iso === undefined ? '' : iso));
+  if (!m) return null;
+  var be = Number(m[1]) + 543;
+  return Number(m[2]) >= 10 ? be + 1 : be;
+}
+
 /** รายชื่อฟังก์ชันที่จะคัดลอกไปใช้ในหน้าเว็บ */
 const SHARED_CLIENT_FUNCTIONS_ = [
   'isValidIsoDate_',
@@ -191,6 +202,7 @@ const SHARED_CLIENT_FUNCTIONS_ = [
   'formatSatang_',
   'bahtText_',
   'academicYearOfDate_',
+  'fiscalYearOfDate_',
 ];
 
 /** ซอร์สโค้ดของฟังก์ชันที่ใช้ร่วมกัน สำหรับฝังลงในหน้าเว็บ (ระยะที่ 2) */
@@ -204,6 +216,7 @@ function sharedClientSource_() {
     formatSatang_: formatSatang_,
     bahtText_: bahtText_,
     academicYearOfDate_: academicYearOfDate_,
+    fiscalYearOfDate_: fiscalYearOfDate_,
   };
   return SHARED_CLIENT_FUNCTIONS_.map(function (name) { return String(fns[name]); }).join('\n\n');
 }

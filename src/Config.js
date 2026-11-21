@@ -27,6 +27,7 @@ const APP = Object.freeze({
   SCHOOL_NAME: 'โรงเรียนวัดเสาหิน',
   PROVINCE: 'เชียงใหม่',
   VERSION: '0.1.0',
+  RELEASE: 'ระยะที่ 1: โครงสร้างระบบและฐานข้อมูล',
   SCHEMA_VERSION: 1,
   TIMEZONE: 'Asia/Bangkok',
 });
@@ -84,6 +85,7 @@ const STATUS = Object.freeze({
     ASSESSMENT_CANCEL: 'ASSESSMENT_CANCEL',
     RECEIPT_CANCEL: 'RECEIPT_CANCEL',
     PAYMENT_CORRECTION: 'PAYMENT_CORRECTION',
+    BOOK_CLOSE: 'BOOK_CLOSE',
   }),
   // สถานะการชำระของรายการเรียกเก็บ: ระบบคำนวณจากข้อมูลทุกครั้ง ไม่ได้เก็บไว้ในชีต
   PAY_STATE: Object.freeze({ UNPAID: 'UNPAID', PARTIAL: 'PARTIAL', PAID: 'PAID', EXEMPT: 'EXEMPT', CANCELLED: 'CANCELLED' }),
@@ -109,6 +111,7 @@ const STATUS_LABELS = Object.freeze({
     ASSESSMENT_CANCEL: 'ยกเลิกรายการเรียกเก็บ',
     RECEIPT_CANCEL: 'ยกเลิกเลขที่ใบเสร็จ',
     PAYMENT_CORRECTION: 'แก้ไขรายการรับเงินที่บันทึกผิด',
+    BOOK_CLOSE: 'ปิดเล่มใบเสร็จก่อนใช้ครบเล่ม',
   },
   PAY_STATE: { UNPAID: 'ยังไม่ชำระ', PARTIAL: 'ชำระบางส่วน', PAID: 'ชำระครบ', EXEMPT: 'ได้รับยกเว้น', CANCELLED: 'ยกเลิก' },
 });
@@ -315,6 +318,7 @@ const SCHEMA = Object.freeze({
       ['StartDate', 'date', 'วันเริ่มเรียกเก็บ'],
       ['DueDate', 'date', 'วันครบกำหนดชำระ'],
       ['Description', 'text', 'คำอธิบาย'],
+      ['ApprovalRef', 'text', 'เลขที่และวันที่ของหนังสือหรือมติที่อนุมัติอัตรานี้ (เช่น มติคณะกรรมการสถานศึกษา)'],
       ['Status', 'enum', 'ACTIVE ใช้งาน / INACTIVE ไม่ใช้งาน', STATUS.FEE_SETTING],
     ].concat(STD_CREATED_COLUMNS_, STD_UPDATED_COLUMNS_),
     unique: [{
@@ -322,7 +326,7 @@ const SCHEMA = Object.freeze({
       message: 'มีอัตราเงินบำรุงของปีการศึกษา ภาคเรียน และระดับชั้นนี้แล้ว',
     }],
     // Amount แก้ได้ที่ชั้นข้อมูล แต่ระยะที่ 4 จะห้ามแก้เมื่อมีรายการเรียกเก็บแล้ว
-    mutable: ['Amount', 'StartDate', 'DueDate', 'Description', 'Status'],
+    mutable: ['Amount', 'StartDate', 'DueDate', 'Description', 'ApprovalRef', 'Status'],
   },
 
   [SHEETS.FEE_ASSESSMENTS]: {
@@ -365,6 +369,7 @@ const SCHEMA = Object.freeze({
       ['Type', 'enum', 'DISCOUNT ลดหย่อน / EXEMPTION ยกเว้น', STATUS.ADJUSTMENT_TYPE],
       ['Amount', 'money', 'จำนวนเงินที่ลดหรือยกเว้น (บาท) แก้ไขไม่ได้'],
       ['Reason', 'text', 'เหตุผล'],
+      ['ReferenceDoc', 'text', 'เอกสารอ้างอิง เช่น เลขที่หนังสือขอยกเว้นหรือประกาศของโรงเรียน'],
       ['Status', 'enum', 'ACTIVE มีผล / REVOKED เพิกถอน', STATUS.ADJUSTMENT],
       ['RequestedBy', 'text', 'ผู้ขอ (เจ้าหน้าที่การเงิน)'],
       ['ApprovedBy', 'text', 'ผู้อนุมัติ (ว่าง = ไม่ต้องอนุมัติตามการตั้งค่า)'],
@@ -569,8 +574,9 @@ const SETTINGS_DEFS = Object.freeze([
   { key: 'APPROVAL_ASSESSMENT_CANCEL', type: 'bool', defaultValue: 'TRUE', description: 'การยกเลิกรายการเรียกเก็บ ต้องให้ผู้อำนวยการอนุมัติ' },
   { key: 'APPROVAL_RECEIPT_CANCEL', type: 'bool', defaultValue: 'TRUE', description: 'การยกเลิกเลขที่ใบเสร็จ ต้องให้ผู้อำนวยการอนุมัติ' },
   { key: 'APPROVAL_PAYMENT_CORRECTION', type: 'bool', defaultValue: 'TRUE', description: 'การแก้ไขรายการรับเงินที่บันทึกผิด ต้องให้ผู้อำนวยการอนุมัติ' },
+  { key: 'APPROVAL_BOOK_CLOSE', type: 'bool', defaultValue: 'TRUE', description: 'การปิดเล่มใบเสร็จก่อนใช้ครบเล่ม ต้องให้ผู้อำนวยการอนุมัติ' },
   { key: 'RECEIPT_LOW_WARNING', type: 'int', defaultValue: '5', min: 0, max: 100, description: 'แจ้งเตือนเมื่อเลขที่ใบเสร็จในเล่มที่กำลังใช้เหลือน้อยกว่าหรือเท่ากับจำนวนนี้' },
-  { key: 'RECEIPT_STRICT_SEQUENCE', type: 'bool', defaultValue: 'FALSE', description: 'TRUE = ต้องใช้เลขที่ถัดไปเท่านั้น / FALSE = ใช้เลขอื่นในเล่มได้ แต่ต้องยืนยันคำเตือนเลขขาดช่วง' },
+  { key: 'RECEIPT_STRICT_SEQUENCE', type: 'bool', defaultValue: 'TRUE', description: 'TRUE = ต้องใช้เลขที่ถัดไปเท่านั้น ถ้าจะข้ามเลขต้องยกเลิกเลขนั้นพร้อมเหตุผลก่อน (ค่าที่แนะนำ) / FALSE = ใช้เลขอื่นในเล่มได้แต่ต้องยืนยันคำเตือนเลขขาดช่วง' },
   { key: 'SESSION_IDLE_MINUTES', type: 'int', defaultValue: '30', min: 5, max: 240, description: 'ไม่ใช้งานเกินกี่นาทีจึงต้องเข้าสู่ระบบใหม่' },
   { key: 'SESSION_MAX_HOURS', type: 'int', defaultValue: '8', min: 1, max: 12, description: 'อายุสูงสุดของการเข้าสู่ระบบแต่ละครั้ง (ชั่วโมง)' },
   { key: 'LOGIN_MAX_ATTEMPTS', type: 'int', defaultValue: '5', min: 3, max: 20, description: 'จำนวนครั้งที่ใส่รหัสผ่านผิดได้ก่อนถูกล็อกชั่วคราว' },
