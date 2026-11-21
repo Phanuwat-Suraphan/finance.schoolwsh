@@ -31,11 +31,11 @@ test('ลูกโซ่ hash ถูกต้องหลังติดตั�
   const { h, g } = setup();
   let result = verify(h);
   assert.equal(result.ok, true);
-  assert.equal(result.total, 24 + 5);
+  assert.equal(result.total, 25 + 5); // ค่าตั้งค่า 23 + ปีการศึกษาเริ่มต้น 1 + SETUP 1 + นักเรียน 5
   g.withScriptLock_(() => g.dbInsert_('Students', { StudentNo: 'B1', FirstName: 'ใหม่', Status: 'STUDYING' }, OFFICER));
   result = verify(h);
   assert.equal(result.ok, true);
-  assert.equal(result.total, 30);
+  assert.equal(result.total, 31);
 });
 
 test('แถวแรกต่อจาก GENESIS และทุกแถวอ้าง hash ของแถวก่อนหน้า', () => {

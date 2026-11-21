@@ -389,6 +389,7 @@ function createEnv(options) {
     uiResponses: [],
     alerts: [],
     menus: [],
+    dialogs: [],
     logs: [],
     fixedNow: null,
     lockContended: false,
@@ -409,6 +410,9 @@ function createEnv(options) {
         addToUi() { env.menus.push(menu); },
       };
       return api;
+    },
+    showModalDialog(output, title) {
+      env.dialogs.push({ title, html: output.getContent() });
     },
     alert(a, b, c) {
       const entry = c === undefined && b === undefined ? { title: '', message: a, buttons: 'OK' } : { title: a, message: b, buttons: c };
@@ -494,10 +498,17 @@ function createEnv(options) {
       sleep() {},
     },
     HtmlService: {
+      createHtmlOutputFromFile(name) {
+        const file = path.join(SRC_DIR, name + '.html');
+        if (!fs.existsSync(file)) throw new Error('Exception: No HTML file named ' + name + ' was found.');
+        return globals.HtmlService.createHtmlOutput(fs.readFileSync(file, 'utf8'));
+      },
       createHtmlOutput(html) {
         const out = {
           _html: String(html || ''), _title: '', _metas: {},
           setTitle(t) { out._title = t; return out; },
+          setWidth() { return out; },
+          setHeight() { return out; },
           getTitle() { return out._title; },
           addMetaTag(name, content) { out._metas[name] = content; return out; },
           getContent() { return out._html; },
@@ -558,4 +569,43 @@ function createInstalledEnv(options) {
   return h;
 }
 
-module.exports = { createEnv, createInstalledEnv, plain, listSourceFiles, SRC_DIR };
+/**
+ * สภาพแวดล้อมของเว็บแอปที่ติดตั้งแล้ว + ผู้ดูแลระบบคนแรก
+ * h.api(action, payload, token) เรียกเหมือนหน้าเว็บ (เริ่มการทำงานรอบใหม่ทุกครั้ง เหมือน Apps Script จริง)
+ */
+function createAppEnv(options) {
+  const h = createInstalledEnv(Object.assign({ now: '2026-11-21T10:00:00+07:00' }, options || {}));
+  h.admin = { username: 'admin', password: 'Khruyai2569', displayName: 'ผู้ดูแลระบบ ทดสอบ' };
+  const created = plain(h.gas.ownerSetupAdmin({
+    username: h.admin.username, displayName: h.admin.displayName,
+    password: h.admin.password, confirmPassword: h.admin.password, mustChangePassword: false,
+  }));
+  if (!created.ok) throw new Error('สร้างผู้ดูแลระบบไม่สำเร็จ: ' + created.message);
+  h.api = (action, payload, token) => {
+    h.newExecution();
+    return plain(h.gas.api({ action, payload: payload === undefined ? {} : payload, token: token === undefined ? null : token }));
+  };
+  h.ok = (action, payload, token) => {
+    const res = h.api(action, payload, token);
+    if (!res.ok) throw new Error(action + ' ไม่สำเร็จ: ' + JSON.stringify(res.error));
+    return res.data;
+  };
+  h.login = (username, password) => h.ok('auth.login', { username, password }).token;
+  h.adminToken = () => h.login(h.admin.username, h.admin.password);
+  /** สร้างผู้ใช้แล้วเปลี่ยนรหัสผ่านชั่วคราวให้พร้อมใช้งาน คืนค่า { user, token, password } */
+  h.addUser = (adminToken, role, username, extra) => {
+    const temp = 'TempPass123';
+    const user = h.ok('users.create', Object.assign({ username, displayName: 'ผู้ใช้ ' + username, role, tempPassword: temp }, extra || {}), adminToken);
+    const first = h.login(username, temp);
+    const password = 'Better2569pw';
+    const changed = h.ok('auth.changePassword', { currentPassword: temp, newPassword: password }, first);
+    return { user, token: changed.token, password };
+  };
+  h.auditRows = () => {
+    h.newExecution();
+    return h.gas.dbAll_('AuditLogs');
+  };
+  return h;
+}
+
+module.exports = { createEnv, createInstalledEnv, createAppEnv, plain, listSourceFiles, SRC_DIR };

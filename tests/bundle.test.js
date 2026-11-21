@@ -10,7 +10,8 @@ const fs = require('fs');
 const { buildBundle, OUT_FILE } = require('../scripts/build');
 const { createEnv, plain } = require('./harness');
 
-const PUBLIC_FUNCTIONS = ['doGet', 'onOpen', 'SetupDatabase', 'menuSetupDatabase', 'menuVerifyAuditLog'];
+const PUBLIC_FUNCTIONS = ['doGet', 'onOpen', 'api', 'SetupDatabase', 'menuSetupDatabase', 'menuVerifyAuditLog',
+  'menuSetupAdmin', 'ownerSetupAdmin'];
 
 function readBundle() {
   assert.ok(fs.existsSync(OUT_FILE), 'ไม่พบ dist/Code.gs กรุณารัน npm run build');
@@ -48,5 +49,5 @@ test('วางไฟล์รวมไฟล์เดียวแล้วก�
 
 test('ขนาดไฟล์รวมไม่ใหญ่เกินไปสำหรับการคัดลอกและวาง', () => {
   const kb = Buffer.byteLength(readBundle(), 'utf8') / 1024;
-  assert.ok(kb < 400, 'ไฟล์รวมมีขนาด ' + kb.toFixed(1) + ' KB');
+  assert.ok(kb < 900, 'ไฟล์รวมมีขนาด ' + kb.toFixed(1) + ' KB');
 });

@@ -18,7 +18,8 @@ const TYPES = ['id', 'text', 'enum', 'money', 'int', 'bool', 'date', 'datetime',
 const SYSTEM_COLUMNS = ['CreatedAt', 'CreatedBy', 'UpdatedAt', 'UpdatedBy'];
 
 /** ฟังก์ชันที่อนุญาตให้เรียกจากภายนอก (google.script.run / เมนู / ทริกเกอร์) */
-const PUBLIC_FUNCTIONS = ['doGet', 'onOpen', 'SetupDatabase', 'menuSetupDatabase', 'menuVerifyAuditLog'];
+const PUBLIC_FUNCTIONS = ['doGet', 'onOpen', 'api', 'SetupDatabase', 'menuSetupDatabase', 'menuVerifyAuditLog',
+  'menuSetupAdmin', 'ownerSetupAdmin'];
 
 test('มีครบ 12 ชีตตามข้อกำหนด และอีก 3 ชีตที่ออกแบบเพิ่ม', () => {
   const required = ['Users', 'Students', 'AcademicYears', 'FeeSettings', 'FeeAssessments', 'Payments',

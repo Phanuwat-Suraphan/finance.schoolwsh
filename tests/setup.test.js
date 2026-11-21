@@ -67,7 +67,9 @@ test('สร้างค่าตั้งค่าเริ่มต้นค�
 test('สร้างค่าระบบใน Script Properties โดยไม่แสดงค่าลับในรายงานหรือ Log', () => {
   const h = freshEnv();
   const report = plain(h.gas.SetupDatabase());
-  assert.deepEqual(report.propertiesInitialized, ['DB_SPREADSHEET_ID', 'AUTH_MODE', 'PASSWORD_PEPPER']);
+  assert.deepEqual(report.propertiesInitialized, ['DB_SPREADSHEET_ID', 'AUTH_MODE', 'PASSWORD_PEPPER', 'PASSWORD_HASH_ITERATIONS']);
+  const iterations = Number(h.env.props.get('PASSWORD_HASH_ITERATIONS'));
+  assert.ok(iterations >= 300 && iterations <= 5000, 'จำนวนรอบแฮชอยู่ในช่วงที่กำหนด: ' + iterations);
   const props = h.env.props;
   assert.equal(props.get('DB_SPREADSHEET_ID'), h.env.activeSpreadsheet.getId());
   assert.equal(props.get('AUTH_MODE'), 'PASSWORD');
@@ -191,7 +193,7 @@ test('เมนูใน Google Sheets: แสดงเมนู ยืนยั
   h.gas.onOpen();
   assert.equal(h.env.menus.length, 1);
   assert.equal(h.env.menus[0].title, 'ระบบเงินบำรุงการศึกษา');
-  assert.deepEqual(h.env.menus[0].items.map((i) => i.fn), ['menuSetupDatabase', 'menuVerifyAuditLog']);
+  assert.deepEqual(h.env.menus[0].items.map((i) => i.fn), ['menuSetupDatabase', 'menuVerifyAuditLog', 'menuSetupAdmin']);
 
   h.env.uiResponses.push('NO');
   h.gas.menuSetupDatabase();
@@ -206,7 +208,7 @@ test('เมนูใน Google Sheets: แสดงเมนู ยืนยั
 
   h.newExecution();
   h.gas.menuVerifyAuditLog();
-  assert.match(h.env.alerts[h.env.alerts.length - 1].message, /^ถูกต้อง: ประวัติการใช้งาน 24 รายการ/);
+  assert.match(h.env.alerts[h.env.alerts.length - 1].message, /^ถูกต้อง: ประวัติการใช้งาน 25 รายการ/);
 });
 
 test('เมนูแสดงข้อผิดพลาดเป็นข้อความภาษาไทยแทนการหยุดทำงาน', () => {
@@ -219,11 +221,18 @@ test('เมนูแสดงข้อผิดพลาดเป็นข้�
   assert.match(last.message, /เฉพาะเจ้าของระบบ/);
 });
 
-test('doGet ระยะที่ 1: หน้าสถานะที่ไม่มีข้อมูลใด ๆ และรองรับมือถือ', () => {
-  const h = createInstalledEnv({ now: '2026-11-21T10:00:00+07:00' });
-  const out = h.gas.doGet({});
-  assert.equal(out.getTitle(), 'ระบบบริหารจัดเก็บเงินบำรุงการศึกษา');
-  assert.equal(out._metas.viewport, 'width=device-width, initial-scale=1');
-  assert.match(out.getContent(), /อยู่ระหว่างการติดตั้ง/);
-  assert.doesNotMatch(out.getContent(), /STU-|PAY-|SCHOOL_|PASSWORD/);
+test('ติดตั้งแล้วมีปีการศึกษาเริ่มต้นเป็นปีปัจจุบัน และไม่สร้างซ้ำเมื่อรันอีกครั้ง', () => {
+  const h = freshEnv();
+  const report = plain(h.gas.SetupDatabase());
+  assert.equal(report.academicYearCreated, 2569);
+  h.newExecution();
+  const years = h.gas.dbAll_('AcademicYears');
+  assert.equal(years.length, 1);
+  assert.equal(years[0].Year, 2569);
+  assert.equal(years[0].IsCurrent, true);
+  assert.equal(years[0].Status, 'OPEN');
+  const again = plain(h.gas.SetupDatabase());
+  assert.equal(again.academicYearCreated, null);
+  h.newExecution();
+  assert.equal(h.gas.dbAll_('AcademicYears').length, 1);
 });
