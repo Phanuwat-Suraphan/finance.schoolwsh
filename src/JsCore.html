@@ -178,6 +178,12 @@
     setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, type === 'error' ? 6500 : 4000);
   };
 
+  /** ล้างข้อความแจ้งเตือนและหน้าต่างที่ค้างอยู่ (ใช้เมื่อเปลี่ยนผู้ใช้ ไม่ให้ผู้ใช้คนถัดไปเห็นข้อความของคนก่อน) */
+  App.clearOverlays = function () {
+    clear(document.getElementById('toast-root'));
+    clear(document.getElementById('modal-root'));
+  };
+
   App.modal = function (opts) {
     var root = document.getElementById('modal-root');
     var previousFocus = document.activeElement;
@@ -261,7 +267,8 @@
       });
       if (o.value !== undefined && o.value !== null) input.value = String(o.value);
     }
-    var label = h('label', { for: id }, o.label, o.required ? h('span', { class: 'req', text: ' *' }) : null);
+    if (o.required) input.setAttribute('aria-required', 'true');
+    var label = h('label', { for: id }, o.label, o.required ? h('span', { class: 'req', text: ' *', 'aria-hidden': 'true' }) : null);
     var preview = null;
     if (o.type === 'date') {
       preview = h('div', { class: 'preview' });

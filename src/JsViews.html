@@ -55,6 +55,7 @@
 
   App.showLogin = function (message, kind) {
     App.state.me = null;
+    App.clearOverlays();
     var notice = h('div', { class: 'alert ' + (kind === 'info' ? 'alert-info' : 'alert-error') + (message ? '' : ' hidden'), role: 'alert', text: message || '' });
     function showError(text) {
       notice.className = 'alert alert-error';
