@@ -193,10 +193,11 @@ function paymentDto_(p, lc, labels, names) {
   };
 }
 
+/** เรียงการรับเงินล่าสุดก่อน: วันที่รับเงิน → เวลาที่บันทึก → เลขที่ใบเสร็จ */
 function comparePaymentsDesc_(a, b) {
   if (a.date !== b.date) return a.date < b.date ? 1 : -1;
   if (a.createdAt !== b.createdAt) return a.createdAt < b.createdAt ? 1 : -1;
-  return 0;
+  return (b.receiptNo || 0) - (a.receiptNo || 0);
 }
 
 // ---------------------------------------------------------------------------

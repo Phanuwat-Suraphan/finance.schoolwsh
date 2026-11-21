@@ -143,3 +143,30 @@ test('sharedClientSource_ ใช้ในหน้าเว็บได้โด
   assert.equal(vm.runInContext('academicYearOfDate_("2026-11-21")', clean), 2569);
   assert.equal(vm.runInContext('fiscalYearOfDate_("2026-11-21")', clean), 2570);
 });
+
+test('termLabel_ และ feeItemLabel_ ใช้เป็นข้อความรายการในใบเสร็จ', () => {
+  assert.equal(g.termLabel_('1', 2569), 'ภาคเรียนที่ 1/2569');
+  assert.equal(g.termLabel_('2', 2569), 'ภาคเรียนที่ 2/2569');
+  assert.equal(g.termLabel_('Y', 2569), 'ปีการศึกษา 2569');
+  assert.equal(g.feeItemLabel_('', '1', 2569, 'ป.1'), 'เงินบำรุงการศึกษา ภาคเรียนที่ 1/2569 ชั้น ป.1');
+  assert.equal(g.feeItemLabel_('ค่าเรียนคอมพิวเตอร์', 'Y', 2570, ''), 'ค่าเรียนคอมพิวเตอร์ ปีการศึกษา 2570');
+});
+
+test('payStateOf_ ตัดสินสถานะตามลำดับ: ยกเลิก → ยกเว้น → ยังไม่ชำระ → บางส่วน → ครบ', () => {
+  assert.equal(g.payStateOf_(true, 50000, 50000), 'CANCELLED', 'ยกเลิกมาก่อนเสมอ');
+  assert.equal(g.payStateOf_(false, 0, 0), 'EXEMPT');
+  assert.equal(g.payStateOf_(false, 50000, 0), 'UNPAID');
+  assert.equal(g.payStateOf_(false, 50000, 1), 'PARTIAL');
+  assert.equal(g.payStateOf_(false, 50000, 49999), 'PARTIAL');
+  assert.equal(g.payStateOf_(false, 50000, 50000), 'PAID');
+  assert.equal(g.payStateOf_(false, 30000, 30000), 'PAID', 'ลดหย่อนบางส่วนแล้วจ่ายครบ');
+});
+
+test('autoAllocate_ ตัดหนี้ตามลำดับที่ส่งมาจนเงินหมด และแจ้งเงินที่เกินยอดค้าง', () => {
+  const items = [{ id: 'A', outstandingSatang: 50000 }, { id: 'B', outstandingSatang: 0 }, { id: 'C', outstandingSatang: 30000 }];
+  assert.deepEqual(plain(g.autoAllocate_(items, 60000)), { allocations: [{ id: 'A', satang: 50000 }, { id: 'C', satang: 10000 }], remainderSatang: 0 });
+  assert.deepEqual(plain(g.autoAllocate_(items, 20000)), { allocations: [{ id: 'A', satang: 20000 }], remainderSatang: 0 });
+  assert.deepEqual(plain(g.autoAllocate_(items, 100000)).remainderSatang, 20000);
+  assert.deepEqual(plain(g.autoAllocate_(items, 0)), { allocations: [], remainderSatang: 0 });
+  assert.deepEqual(plain(g.autoAllocate_([], 5000)), { allocations: [], remainderSatang: 5000 });
+});

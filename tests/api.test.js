@@ -158,6 +158,27 @@ test('คำตอบทุกคำสั่งส่งผ่าน google.scr
   call('years.list', {}, tokens.DIRECTOR);
   call('audit.list', {}, tokens.DIRECTOR);
   call('audit.verify', {}, tokens.ADMIN);
+  // ระยะที่ 4: คำตอบของหน้าการเงินทั้งหมด
+  const st = call('students.create', { studentNo: '10001', firstName: 'หนึ่ง', gradeLevel: 'ป.1', room: '1', year: 2569 }, tokens.FINANCE).data;
+  const fee = call('fees.create', { year: 2569, term: '1', gradeLevels: ['ป.1'], amount: '500', dueDate: '2026-06-30', approvalRef: 'มติที่ 1/2569' }, tokens.FINANCE).data[0];
+  call('assessments.preview', { feeSettingId: fee.feeSettingId }, tokens.FINANCE);
+  call('assessments.generate', { feeSettingId: fee.feeSettingId }, tokens.FINANCE);
+  const reg = call('receipts.registerBook', { bookNo: '1', startNo: 1, endNo: 10 }, tokens.FINANCE).data;
+  call('receipts.activateBook', { bookId: reg.bookId }, tokens.FINANCE);
+  const pctx = call('payments.context', { studentId: st.studentId }, tokens.FINANCE).data;
+  call('payments.create', {
+    requestKey: 'serialization-test-0001', studentId: st.studentId, paymentDate: '2026-11-21', amount: '100', channel: 'เงินสด',
+    receivedByName: 'ทดสอบ', bookId: pctx.book.bookId, receiptNo: 1, confirmPhysicalReceipt: true,
+    allocations: [{ assessmentId: pctx.items[0].assessmentId, amount: '100' }],
+  }, tokens.FINANCE);
+  call('adjustments.request', { assessmentId: pctx.items[0].assessmentId, type: 'DISCOUNT', amount: '50', reason: 'ทดสอบ', referenceDoc: 'หนังสือที่ 1' }, tokens.FINANCE);
+  call('fees.list', {}, tokens.DIRECTOR);
+  call('assessments.list', { feeSettingId: fee.feeSettingId }, tokens.DIRECTOR);
+  call('ledger.students', {}, tokens.DIRECTOR);
+  call('ledger.student', { studentId: st.studentId }, tokens.DIRECTOR);
+  call('approvals.list', { status: 'ALL' }, tokens.DIRECTOR);
+  call('receipts.books', {}, tokens.DIRECTOR);
+  call('payments.list', {}, tokens.DIRECTOR);
   const walk = (v, path) => {
     const tag = Object.prototype.toString.call(v);
     assert.notEqual(tag, '[object Date]', 'พบ Date ที่ ' + path);

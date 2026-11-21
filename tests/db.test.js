@@ -238,3 +238,19 @@ test('ชีตที่ขาดคอลัมน์ แจ้งให้ร�
   h.newExecution();
   assert.throws(() => g.dbAll_('Students'), (e) => /ขาดคอลัมน์ Prefix/.test(e.message) && /ติดตั้ง/.test(e.message));
 });
+
+test('จองรหัสล่วงหน้า: ใช้กำหนดรหัสเองได้เฉพาะรหัสที่จองไว้กับชีตนั้น และใช้ได้ครั้งเดียว', () => {
+  const { g, write } = setup();
+  assert.throws(() => g.dbReserveId_('Payments'), /lock/i, 'ต้องถือ lock');
+  const result = write(() => {
+    const id = g.dbReserveId_('Students');
+    assert.match(id, /^STU-\d{14}-[0-9A-F]{6}$/);
+    const rec = g.dbInsert_('Students', student('99', 'จอง', { StudentId: id }), OFFICER);
+    assert.equal(rec.StudentId, id);
+    assert.throws(() => g.dbInsert_('Students', student('98', 'ซ้ำ', { StudentId: id }), OFFICER), /ห้ามกำหนด/, 'ใช้รหัสที่จองแล้วซ้ำไม่ได้');
+    const other = g.dbReserveId_('Payments');
+    assert.throws(() => g.dbInsert_('Students', student('97', 'ข้ามชีต', { StudentId: other }), OFFICER), /ห้ามกำหนด/);
+    return id;
+  });
+  assert.ok(g.dbGet_('Students', result));
+});
