@@ -1,0 +1,12 @@
+{
+  "name": "finance-schoolwsh",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ระบบบริหารจัดเก็บเงินบำรุงการศึกษา โรงเรียนวัดเสาหิน (Google Apps Script) - ไฟล์นี้ใช้สำหรับรันชุดทดสอบบน Node.js เท่านั้น",
+  "scripts": {
+    "test": "node --test"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
