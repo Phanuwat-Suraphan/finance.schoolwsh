@@ -28,6 +28,15 @@ const EXPECTED = {
   'years.setCurrent': ['ADMIN'],
   'audit.list': ['ADMIN', 'DIRECTOR'],
   'audit.verify': ['ADMIN', 'DIRECTOR'],
+  'students.list': ['FINANCE', 'DIRECTOR'],
+  'students.get': ['FINANCE', 'DIRECTOR'],
+  'students.create': ['FINANCE'],
+  'students.update': ['FINANCE'],
+  'students.setStatus': ['FINANCE'],
+  'students.importPreview': ['FINANCE'],
+  'students.importCommit': ['FINANCE'],
+  'students.promotePreview': ['FINANCE'],
+  'students.promoteCommit': ['FINANCE'],
 };
 const PUBLIC = ['auth.login', 'auth.loginGoogle'];
 

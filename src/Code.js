@@ -10,6 +10,9 @@
  * ============================================================================
  */
 
+/** ไฟล์หน้าจอแยกตามโมดูล (เพิ่มชื่อไฟล์ที่นี่เมื่อมีโมดูลใหม่) */
+const VIEW_FILES_ = ['JsViews', 'JsStudents'];
+
 function doGet() {
   return HtmlService.createHtmlOutput(renderAppHtml_())
     .setTitle(APP.NAME)
@@ -23,7 +26,7 @@ function renderAppHtml_() {
   html = injectHtml_(html, '/*@@BOOT@@*/', 'var BOOT = ' + safeJsonForScript_(bootConfig_()) + ';');
   html = injectHtml_(html, '/*@@SHARED@@*/', sharedClientSource_());
   html = injectHtml_(html, '<!--@@CORE@@-->', htmlSource_('JsCore'));
-  html = injectHtml_(html, '<!--@@VIEWS@@-->', htmlSource_('JsViews'));
+  html = injectHtml_(html, '<!--@@VIEWS@@-->', VIEW_FILES_.map(htmlSource_).join('\n'));
   return html;
 }
 

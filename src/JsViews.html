@@ -12,6 +12,7 @@
 
   App.MENU_GROUPS = [
     { key: 'main', label: 'ทั่วไป' },
+    { key: 'students', label: 'ข้อมูลนักเรียน' },
     { key: 'manage', label: 'การจัดการระบบ' },
     { key: 'info', label: 'ข้อมูลโรงเรียน' },
   ];
@@ -55,6 +56,8 @@
 
   App.showLogin = function (message, kind) {
     App.state.me = null;
+    App.state.studentYear = null;
+    App.state.studentFilters = { grade: '', room: '', status: 'STUDYING', q: '' };
     App.clearOverlays();
     var notice = h('div', { class: 'alert ' + (kind === 'info' ? 'alert-info' : 'alert-error') + (message ? '' : ' hidden'), role: 'alert', text: message || '' });
     function showError(text) {
@@ -209,15 +212,16 @@
         card = h('div', { class: 'card' },
           h('div', { class: 'card-head' }, h('h2', { text: 'สิ่งที่ทำได้ในขณะนี้' })),
           h('div', { class: 'card-body' }, stepList([
+            { text: 'ดูรายชื่อนักเรียนแยกตามปีการศึกษา ชั้น และห้อง', route: 'students' },
             { text: 'ดูประวัติการใช้งานของทุกบัญชี และตรวจว่าประวัติไม่ถูกแก้ไข', route: 'audit' },
             { text: 'ดูข้อมูลโรงเรียนและปีการศึกษา', route: 'settings' },
             { text: 'Dashboard การเงินและการอนุมัติรายการจะเปิดใช้ในระยะถัดไป' },
           ])));
       } else {
         card = h('div', { class: 'card' },
-          h('div', { class: 'card-head' }, h('h2', { text: 'งานการเงินที่จะเปิดใช้ในระยะถัดไป' })),
+          h('div', { class: 'card-head' }, h('h2', { text: 'งานของเจ้าหน้าที่การเงิน' })),
           h('div', { class: 'card-body' }, stepList([
-            { text: 'ข้อมูลนักเรียนและการนำเข้าจาก Excel (ระยะที่ 3)' },
+            { text: 'นำเข้ารายชื่อนักเรียนจาก Excel หรือ CSV แล้วตรวจรายชื่อแยกตามชั้นและห้อง', route: 'students', button: 'ข้อมูลนักเรียน' },
             { text: 'ตั้งอัตราเงินบำรุง เรียกเก็บ และรับชำระ (ระยะที่ 4)' },
             { text: 'ทะเบียนคุมใบเสร็จรับเงิน (ระยะที่ 5)' },
             { text: 'ติดตามยอดค้าง รายงาน และพิมพ์เอกสาร (ระยะที่ 6–7)' },
@@ -228,7 +232,7 @@
         h('div', { class: 'grid-cards' },
           stat('ปีการศึกษาปัจจุบัน', String(me.school.currentAcademicYear)),
           stat('บทบาทของคุณ', me.user.roleLabel),
-          stat('สถานะการพัฒนาระบบ', 'ระยะที่ 2 จาก 8')),
+          stat('สถานะการพัฒนาระบบ', (/ระยะที่ \d+/.exec(BOOT.release) || ['ระยะที่ ?'])[0] + ' จาก 8')),
         card);
     },
   });
@@ -655,6 +659,5 @@
     },
   });
 
-  App.start();
 })();
 </script>

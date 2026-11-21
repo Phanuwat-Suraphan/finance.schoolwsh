@@ -60,8 +60,10 @@ test('หน้าเว็บโหลดทรัพยากรภายน�
   const html = h.gas.doGet({}).getContent();
   const urls = html.match(/https?:\/\/[^\s"'<>)]+/g) || [];
   const hosts = [...new Set(urls.map((u) => new URL(u).host))].sort();
-  assert.deepEqual(hosts, ['fonts.googleapis.com', 'fonts.gstatic.com', 'www.w3.org'].filter((x) => hosts.includes(x)));
-  assert.ok(hosts.every((x) => ['fonts.googleapis.com', 'fonts.gstatic.com', 'www.w3.org'].includes(x)), hosts.join(','));
+  // www.w3.org และ schemas.openxmlformats.org เป็นชื่อ namespace ของ SVG/Excel ไม่ใช่การโหลดข้อมูล
+  const allowed = ['fonts.googleapis.com', 'fonts.gstatic.com', 'www.w3.org', 'schemas.openxmlformats.org'];
+  assert.ok(hosts.every((x) => allowed.includes(x)), hosts.join(','));
+  assert.doesNotMatch(html, /\bfetch\(|XMLHttpRequest|navigator\.sendBeacon|new WebSocket/, 'หน้าเว็บต้องติดต่อ Server ผ่าน google.script.run เท่านั้น');
   assert.doesNotMatch(html, /<script[^>]+src=/i, 'ห้ามโหลดสคริปต์จากภายนอก');
 });
 

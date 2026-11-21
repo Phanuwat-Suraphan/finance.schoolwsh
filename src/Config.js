@@ -26,8 +26,8 @@ const APP = Object.freeze({
   NAME: 'ระบบบริหารจัดเก็บเงินบำรุงการศึกษา',
   SCHOOL_NAME: 'โรงเรียนวัดเสาหิน',
   PROVINCE: 'เชียงใหม่',
-  VERSION: '0.2.0',
-  RELEASE: 'ระยะที่ 2: ระบบเข้าสู่ระบบและสิทธิ์',
+  VERSION: '0.3.0',
+  RELEASE: 'ระยะที่ 3: ระบบนักเรียน',
   SCHEMA_VERSION: 1,
   TIMEZONE: 'Asia/Bangkok',
 });
@@ -156,6 +156,7 @@ const AUDIT_ACTIONS = Object.freeze({
   RESTORE: 'RESTORE',
   INTEGRITY_CHECK: 'INTEGRITY_CHECK',
   ACCESS_DENIED: 'ACCESS_DENIED',
+  PROMOTE: 'PROMOTE',
 });
 
 const AUDIT_ACTION_LABELS = Object.freeze({
@@ -176,6 +177,7 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   RESTORE: 'กู้คืนข้อมูล',
   INTEGRITY_CHECK: 'ตรวจความถูกต้อง',
   ACCESS_DENIED: 'ถูกปฏิเสธสิทธิ์',
+  PROMOTE: 'เลื่อนชั้น',
 });
 
 const SHEETS = Object.freeze({

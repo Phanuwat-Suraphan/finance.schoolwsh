@@ -30,6 +30,8 @@ function apiActions_() {
   const ALL = [ROLES.ADMIN, ROLES.FINANCE, ROLES.DIRECTOR];
   const ADMIN = [ROLES.ADMIN];
   const OVERSIGHT = [ROLES.ADMIN, ROLES.DIRECTOR];
+  const FINANCE = [ROLES.FINANCE];
+  const STUDENT_VIEW = [ROLES.FINANCE, ROLES.DIRECTOR];
   API_ACTIONS_ = {
     // การเข้าสู่ระบบ
     'auth.login': { public: true, write: true, handler: authLogin_ },
@@ -53,6 +55,16 @@ function apiActions_() {
     // ประวัติการใช้งาน
     'audit.list': { roles: OVERSIGHT, write: false, handler: auditList_ },
     'audit.verify': { roles: OVERSIGHT, write: true, handler: auditVerify_ },
+    // นักเรียน (ผู้ดูแลระบบไม่เห็นข้อมูลนักเรียน ตามหลักสิทธิ์น้อยที่สุด)
+    'students.list': { roles: STUDENT_VIEW, write: false, handler: studentsList_ },
+    'students.get': { roles: STUDENT_VIEW, write: false, handler: studentsGet_ },
+    'students.create': { roles: FINANCE, write: true, handler: studentsCreate_ },
+    'students.update': { roles: FINANCE, write: true, handler: studentsUpdate_ },
+    'students.setStatus': { roles: FINANCE, write: true, handler: studentsSetStatus_ },
+    'students.importPreview': { roles: FINANCE, write: false, handler: studentsImportPreview_ },
+    'students.importCommit': { roles: FINANCE, write: true, handler: studentsImportCommit_ },
+    'students.promotePreview': { roles: FINANCE, write: false, handler: studentsPromotePreview_ },
+    'students.promoteCommit': { roles: FINANCE, write: true, handler: studentsPromoteCommit_ },
   };
   Object.keys(API_ACTIONS_).forEach(function (k) { Object.freeze(API_ACTIONS_[k]); });
   Object.freeze(API_ACTIONS_);

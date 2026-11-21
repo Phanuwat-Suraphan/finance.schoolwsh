@@ -192,6 +192,146 @@ function fiscalYearOfDate_(iso) {
   return Number(m[2]) >= 10 ? be + 1 : be;
 }
 
+/**
+ * แยกข้อความ CSV/TSV เป็นตาราง (array ของแถว)
+ * รองรับเครื่องหมายคำพูด การขึ้นบรรทัดใหม่ในช่อง BOM และเลือกตัวคั่นอัตโนมัติ (แท็บ จุลภาค หรืออัฒภาค)
+ * ใช้ได้ทั้งไฟล์ CSV และข้อความที่คัดลอกจาก Excel มาวาง
+ */
+function parseDelimitedText_(text, delimiter) {
+  var s = String(text === null || text === undefined ? '' : text).replace(/^﻿/, '');
+  var d = delimiter;
+  if (!d) {
+    var firstLine = s.split(/\r?\n/).filter(function (l) { return l.trim() !== ''; })[0] || '';
+    var counts = { '\t': firstLine.split('\t').length, ',': firstLine.split(',').length, ';': firstLine.split(';').length };
+    d = '\t';
+    if (counts[','] > counts[d]) d = ',';
+    if (counts[';'] > counts[d]) d = ';';
+  }
+  var rows = [];
+  var row = [];
+  var field = '';
+  var inQuotes = false;
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    if (inQuotes) {
+      if (c === '"') {
+        if (s.charAt(i + 1) === '"') { field += '"'; i++; } else { inQuotes = false; }
+      } else {
+        field += c;
+      }
+    } else if (c === '"' && field === '') {
+      inQuotes = true;
+    } else if (c === d) {
+      row.push(field);
+      field = '';
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && s.charAt(i + 1) === '\n') i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = '';
+    } else {
+      field += c;
+    }
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(function (r) { return r.some(function (x) { return String(x).trim() !== ''; }); });
+}
+
+/**
+ * หาคอลัมน์ข้อมูลนักเรียนจากหัวตาราง (ภาษาไทยหรืออังกฤษ)
+ * คืนค่า { studentNo, prefix, firstName, lastName, fullName, gradeLevel, room, gradeRoom, classNo } เป็นเลขคอลัมน์ (-1 = ไม่พบ)
+ */
+function detectStudentColumns_(headerCells) {
+  var FIELDS = {
+    studentNo: ['เลขประจำตัวนักเรียน', 'เลขประจำตัว', 'รหัสนักเรียน', 'รหัสประจำตัวนักเรียน', 'รหัสประจำตัว', 'studentno', 'studentid', 'id'],
+    prefix: ['คำนำหน้าชื่อ', 'คำนำหน้า', 'prefix', 'title'],
+    fullName: ['ชื่อ-นามสกุล', 'ชื่อ-สกุล', 'ชื่อนามสกุล', 'ชื่อสกุล', 'ชื่อ–นามสกุล', 'fullname', 'name'],
+    firstName: ['ชื่อ', 'ชื่อจริง', 'firstname'],
+    lastName: ['นามสกุล', 'สกุล', 'lastname', 'surname'],
+    gradeRoom: ['ชั้น/ห้อง', 'ระดับชั้น/ห้อง', 'ห้องเรียน(ชั้น/ห้อง)', 'class'],
+    gradeLevel: ['ระดับชั้น', 'ชั้น', 'ชั้นเรียน', 'grade', 'level'],
+    room: ['ห้อง', 'ห้องเรียน', 'room'],
+    classNo: ['เลขที่', 'ที่', 'no', 'no.', 'number'],
+  };
+  function norm(v) { return String(v === null || v === undefined ? '' : v).toLowerCase().replace(/[\s_]+/g, ''); }
+  var result = {};
+  var used = {};
+  Object.keys(FIELDS).forEach(function (key) {
+    result[key] = -1;
+    var aliases = FIELDS[key].map(norm);
+    for (var i = 0; i < headerCells.length; i++) {
+      if (!used[i] && aliases.indexOf(norm(headerCells[i])) !== -1) {
+        result[key] = i;
+        used[i] = true;
+        break;
+      }
+    }
+  });
+  return result;
+}
+
+/** หาแถวหัวตาราง (ใน 10 แถวแรก) ที่มีคอลัมน์ข้อมูลนักเรียนอย่างน้อย 2 คอลัมน์ คืนค่า { index, columns } หรือ null */
+function findStudentHeaderRow_(rows) {
+  for (var r = 0; r < Math.min(rows.length, 10); r++) {
+    var cols = detectStudentColumns_(rows[r]);
+    var found = Object.keys(cols).filter(function (k) { return cols[k] !== -1; }).length;
+    var hasName = cols.firstName !== -1 || cols.fullName !== -1;
+    if (found >= 2 && (cols.studentNo !== -1 || hasName)) return { index: r, columns: cols };
+  }
+  return null;
+}
+
+/** แยกชื่อเต็มภาษาไทยเป็น { prefix, firstName, lastName } เช่น "เด็กชายสมชาย ใจดี" */
+function splitThaiFullName_(fullName) {
+  var PREFIXES = ['เด็กชาย', 'เด็กหญิง', 'ด.ช.', 'ด.ญ.', 'ดช.', 'ดญ.', 'นางสาว', 'น.ส.', 'นาย', 'นาง', 'Mr.', 'Mrs.', 'Miss', 'Ms.'];
+  var s = String(fullName === null || fullName === undefined ? '' : fullName).replace(/\s+/g, ' ').trim();
+  var prefix = '';
+  for (var i = 0; i < PREFIXES.length; i++) {
+    if (s.indexOf(PREFIXES[i]) === 0) {
+      prefix = PREFIXES[i];
+      s = s.slice(prefix.length).trim();
+      break;
+    }
+  }
+  var parts = s === '' ? [] : s.split(' ');
+  return { prefix: prefix, firstName: parts.shift() || '', lastName: parts.join(' ') };
+}
+
+/**
+ * แปลงชื่อระดับชั้นให้ตรงกับรายการที่โรงเรียนตั้งไว้ เช่น "ป1" "ป. 1" "ประถมศึกษาปีที่ 1" → "ป.1"
+ * allowed = รายการระดับชั้นจากหน้าตั้งค่า คืนค่า '' ถ้าจับคู่ไม่ได้
+ */
+function normalizeGradeLevel_(text, allowed) {
+  var s = String(text === null || text === undefined ? '' : text).replace(/\s+/g, '').replace(/ปีที่/g, '');
+  var candidate = s;
+  var patterns = [
+    [/^(อนุบาล|อ\.?)(\d+)$/, 'อ.'],
+    [/^(ประถมศึกษา|ประถม|ป\.?)(\d+)$/, 'ป.'],
+    [/^(มัธยมศึกษา|มัธยม|ม\.?)(\d+)$/, 'ม.'],
+  ];
+  for (var i = 0; i < patterns.length; i++) {
+    var m = patterns[i][0].exec(s);
+    if (m) { candidate = patterns[i][1] + Number(m[2]); break; }
+  }
+  for (var j = 0; j < (allowed || []).length; j++) {
+    if (String(allowed[j]).replace(/\s+/g, '') === candidate) return allowed[j];
+  }
+  return '';
+}
+
+/** ห้องเรียน: ตัดคำว่า "ห้อง" และช่องว่าง ตัวเลขนำหน้าด้วย 0 ถูกตัด ("01" → "1") */
+function normalizeRoom_(text) {
+  var s = String(text === null || text === undefined ? '' : text).replace(/ห้อง/g, '').replace(/\s+/g, '');
+  return /^\d+$/.test(s) ? String(Number(s)) : s;
+}
+
+/** ชื่อเต็มสำหรับแสดงผล: คำนำหน้าติดกับชื่อ แล้วเว้นวรรคก่อนนามสกุล */
+function studentDisplayName_(prefix, firstName, lastName) {
+  var head = String(prefix || '') + String(firstName || '');
+  return lastName ? head + ' ' + lastName : head;
+}
+
 /** รายชื่อฟังก์ชันที่จะคัดลอกไปใช้ในหน้าเว็บ */
 const SHARED_CLIENT_FUNCTIONS_ = [
   'isValidIsoDate_',
@@ -203,6 +343,13 @@ const SHARED_CLIENT_FUNCTIONS_ = [
   'bahtText_',
   'academicYearOfDate_',
   'fiscalYearOfDate_',
+  'parseDelimitedText_',
+  'detectStudentColumns_',
+  'findStudentHeaderRow_',
+  'splitThaiFullName_',
+  'normalizeGradeLevel_',
+  'normalizeRoom_',
+  'studentDisplayName_',
 ];
 
 /** ซอร์สโค้ดของฟังก์ชันที่ใช้ร่วมกัน สำหรับฝังลงในหน้าเว็บ (ระยะที่ 2) */
@@ -217,6 +364,13 @@ function sharedClientSource_() {
     bahtText_: bahtText_,
     academicYearOfDate_: academicYearOfDate_,
     fiscalYearOfDate_: fiscalYearOfDate_,
+    parseDelimitedText_: parseDelimitedText_,
+    detectStudentColumns_: detectStudentColumns_,
+    findStudentHeaderRow_: findStudentHeaderRow_,
+    splitThaiFullName_: splitThaiFullName_,
+    normalizeGradeLevel_: normalizeGradeLevel_,
+    normalizeRoom_: normalizeRoom_,
+    studentDisplayName_: studentDisplayName_,
   };
   return SHARED_CLIENT_FUNCTIONS_.map(function (name) { return String(fns[name]); }).join('\n\n');
 }

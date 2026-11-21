@@ -1,0 +1,717 @@
+<script>
+/* ==========================================================================
+   JsStudents — หน้าจอข้อมูลนักเรียน (ระยะที่ 3)
+   รายชื่อ / เพิ่ม / แก้ไข / เปลี่ยนสถานะ / นำเข้าจาก Excel-CSV / เลื่อนชั้นขึ้นปีใหม่
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var icon = App.icon;
+  var MANAGE = 'FINANCE';
+  var STATUS_OPTIONS = [
+    { value: 'STUDYING', label: 'กำลังศึกษา' },
+    { value: 'TRANSFERRED', label: 'ย้ายออก' },
+    { value: 'GRADUATED', label: 'จบการศึกษา' },
+  ];
+  var STATUS_KIND = { STUDYING: 'success', TRANSFERRED: 'warning', GRADUATED: 'muted' };
+
+  function canManage() { return App.state.me && App.state.me.user.role === MANAGE; }
+
+  function button(label, kind, onClick, iconName) {
+    var btn = h('button', { type: 'button', class: 'btn' + (kind ? ' btn-' + kind : '') }, iconName ? icon(iconName) : null, label);
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function todayIso() {
+    var d = new Date();
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  }
+
+  function prefixOptions(current, suggestions) {
+    var list = [{ value: '', label: '(ไม่ระบุ)' }].concat((suggestions || []).map(function (p) { return { value: p, label: p }; }));
+    if (current && !list.some(function (o) { return o.value === current; })) list.push({ value: current, label: current });
+    return list;
+  }
+
+  App.state.studentFilters = App.state.studentFilters || { grade: '', room: '', status: 'STUDYING', q: '' };
+
+  // ---------------------------------------------------------------------------
+  // เพิ่ม / แก้ไข / เปลี่ยนสถานะ / รายละเอียด
+  // ---------------------------------------------------------------------------
+  function openStudentForm(ctx, student) {
+    var editing = !!student;
+    var openYears = ctx.years.filter(function (y) { return y.status === 'OPEN'; });
+    var fields = [
+      { key: 'studentNo', label: 'เลขประจำตัวนักเรียน', required: true, maxlength: 20, value: editing ? student.studentNo : '', inputmode: 'numeric' },
+      { key: 'prefix', label: 'คำนำหน้าชื่อ', type: 'select', options: prefixOptions(editing ? student.prefix : '', ctx.data.prefixSuggestions), value: editing ? student.prefix : '' },
+      { key: 'firstName', label: 'ชื่อ', required: true, maxlength: 100, value: editing ? student.firstName : '' },
+      { key: 'lastName', label: 'นามสกุล', maxlength: 100, value: editing ? student.lastName : '' },
+    ];
+    if (!editing) {
+      fields.push({ key: 'year', label: 'ปีการศึกษา', type: 'select', required: true, span2: true,
+        options: openYears.map(function (y) { return { value: String(y.year), label: y.label }; }),
+        value: String(openYears.some(function (y) { return y.year === ctx.data.year; }) ? ctx.data.year : (openYears[0] ? openYears[0].year : '')) });
+    }
+    fields.push(
+      { key: 'gradeLevel', label: 'ระดับชั้น', type: 'select', required: true, options: ctx.data.gradeLevels.map(function (g) { return { value: g, label: g }; }),
+        value: editing ? student.gradeLevel : (App.state.studentFilters.grade || ctx.data.gradeLevels[0]) },
+      { key: 'room', label: 'ห้อง', maxlength: 10, value: editing ? student.room : (App.state.studentFilters.room || '1'), help: 'เช่น 1, 2 หรือ ก' },
+      { key: 'classNo', label: 'เลขที่', type: 'number', min: 1, max: 999, inputmode: 'numeric', value: editing && student.classNo !== null ? student.classNo : '' });
+
+    App.formModal({
+      title: editing ? 'แก้ไขข้อมูลนักเรียน' : 'เพิ่มนักเรียน',
+      intro: editing ? 'ชั้น ห้อง และเลขที่ ที่แก้ไขเป็นของปีการศึกษา ' + ctx.data.year + ' ข้อมูลปีอื่นไม่เปลี่ยน' : null,
+      fields: fields,
+      onSubmit: function (v) {
+        var payload = {
+          studentNo: v.studentNo, prefix: v.prefix, firstName: v.firstName, lastName: v.lastName,
+          gradeLevel: v.gradeLevel, room: v.room, classNo: v.classNo,
+        };
+        if (editing) {
+          payload.studentId = student.studentId;
+          payload.year = ctx.data.year;
+          return App.api('students.update', payload);
+        }
+        payload.year = v.year;
+        return App.api('students.create', payload).catch(function (err) {
+          if (err.reason !== 'NAME_DUPLICATE') throw err;
+          return App.confirm(err.message, { title: 'ชื่อซ้ำกับนักเรียนเดิม', confirmLabel: 'ยืนยัน เป็นคนละคน' }).then(function (ok) {
+            if (!ok) throw { message: 'ยังไม่ได้บันทึก: ' + err.message };
+            payload.confirmDuplicateName = true;
+            return App.api('students.create', payload);
+          });
+        });
+      },
+      onDone: function (s) {
+        App.toast((editing ? 'บันทึกข้อมูล ' : 'เพิ่มนักเรียน ') + s.fullName + ' เรียบร้อยแล้ว', 'success');
+        App.refresh();
+      },
+    });
+  }
+
+  function openStatusForm(ctx, student) {
+    App.formModal({
+      title: 'เปลี่ยนสถานะ: ' + student.fullName,
+      intro: 'ยอดค้างชำระ (ถ้ามี) ยังคงอยู่แม้นักเรียนย้ายออกหรือจบการศึกษา',
+      fields: [
+        { key: 'status', label: 'สถานะ', type: 'select', options: STATUS_OPTIONS, value: student.status },
+        { key: 'statusDate', label: 'วันที่', type: 'date', value: todayIso() },
+        { key: 'note', label: 'หมายเหตุ', type: 'textarea', span2: true, maxlength: 300, help: 'บังคับเมื่อย้ายออกหรือจบการศึกษา เช่น ย้ายไปโรงเรียนใด' },
+      ],
+      onSubmit: function (v) {
+        return App.api('students.setStatus', { studentId: student.studentId, year: ctx.data.year, status: v.status, statusDate: v.statusDate, note: v.note });
+      },
+      onDone: function (s) {
+        App.toast('เปลี่ยนสถานะ ' + s.fullName + ' เป็น' + s.statusLabel + 'แล้ว', 'success');
+        App.refresh();
+      },
+    });
+  }
+
+  function openStudentDetail(student) {
+    App.api('students.get', { studentId: student.studentId }).then(function (d) {
+      var s = d.student;
+      App.modal({
+        title: s.fullName,
+        size: 'lg',
+        body: [
+          h('table', { class: 'kv' }, h('tbody', null,
+            h('tr', null, h('th', { text: 'เลขประจำตัวนักเรียน' }), h('td', { text: s.studentNo })),
+            h('tr', null, h('th', { text: 'สถานะปัจจุบัน' }), h('td', null, App.badge(s.statusLabel, STATUS_KIND[s.status]))),
+            s.statusDate ? h('tr', null, h('th', { text: 'วันที่เปลี่ยนสถานะ' }), h('td', { text: App.fmt.dateLong(s.statusDate) })) : null,
+            s.statusNote ? h('tr', null, h('th', { text: 'หมายเหตุ' }), h('td', { text: s.statusNote })) : null)),
+          h('h3', { text: 'ประวัติชั้นเรียนทุกปีการศึกษา' }),
+          App.table({
+            rows: d.enrollments,
+            empty: 'ยังไม่มีข้อมูลชั้นเรียน',
+            columns: [
+              { label: 'ปีการศึกษา', key: 'year' },
+              { label: 'ชั้น/ห้อง', key: 'classLabel' },
+              { label: 'เลขที่', key: 'classNo' },
+              { label: 'สถานะ', render: function (e) { return App.badge(e.enrollStatusLabel, STATUS_KIND[e.enrollStatus]); } },
+              { label: 'หมายเหตุ', key: 'note' },
+            ],
+          }),
+          h('p', { class: 'muted small', text: 'ประวัติการเรียกเก็บและการชำระเงินจะแสดงที่นี่เมื่อเปิดใช้ระยะที่ 4' }),
+        ],
+        actions: [{ label: 'ปิด', kind: 'secondary' }],
+      });
+    }).catch(App.fail);
+  }
+
+  // ---------------------------------------------------------------------------
+  // รายชื่อนักเรียน
+  // ---------------------------------------------------------------------------
+  App.defineRoute('students', {
+    title: 'นักเรียน',
+    roles: ['FINANCE', 'DIRECTOR'],
+    menu: { group: 'students', label: 'นักเรียน', icon: 'student' },
+    render: function (params) {
+      var year = params.year || App.state.studentYear || App.state.me.school.currentAcademicYear;
+      return Promise.all([App.api('students.list', { year: year }), App.api('years.list')]).then(function (res) {
+        var data = res[0];
+        var years = res[1];
+        App.state.studentYear = data.year;
+        var ctx = { data: data, years: years };
+        var f = App.state.studentFilters;
+        var yearSel = App.field({ label: 'ปีการศึกษา', type: 'select', value: String(data.year),
+          options: years.map(function (y) { return { value: String(y.year), label: y.label + (y.isCurrent ? ' (ปัจจุบัน)' : '') }; }) });
+        var gradeSel = App.field({ label: 'ระดับชั้น', type: 'select', value: f.grade,
+          options: [{ value: '', label: 'ทุกชั้น' }].concat(data.gradeLevels.map(function (g) { return { value: g, label: g }; })) });
+        var roomSel = App.field({ label: 'ห้อง', type: 'select' });
+        var statusSel = App.field({ label: 'สถานะ', type: 'select', value: f.status,
+          options: [{ value: '', label: 'ทุกสถานะ' }].concat(STATUS_OPTIONS) });
+        var search = App.field({ label: 'ค้นหา', placeholder: 'ชื่อ นามสกุล หรือเลขประจำตัว', value: f.q });
+        var summary = h('div', { class: 'toolbar', style: { gap: '8px', marginBottom: '12px' } });
+        var list = h('div');
+
+        function fillRooms() {
+          var rooms = f.grade ? (data.rooms[f.grade] || []) : [];
+          clear(roomSel.input);
+          roomSel.input.appendChild(h('option', { value: '', text: f.grade ? 'ทุกห้อง' : '(เลือกระดับชั้นก่อน)' }));
+          rooms.forEach(function (r) { roomSel.input.appendChild(h('option', { value: r, text: 'ห้อง ' + r })); });
+          if (rooms.indexOf(f.room) === -1) f.room = '';
+          roomSel.input.value = f.room;
+          roomSel.input.disabled = !f.grade;
+        }
+
+        function draw() {
+          var q = f.q.trim().toLowerCase().replace(/\s+/g, '');
+          var rows = data.rows.filter(function (r) {
+            if (f.grade && r.gradeLevel !== f.grade) return false;
+            if (f.room && r.room !== f.room) return false;
+            if (f.status && r.enrollStatus !== f.status) return false;
+            if (q && (r.studentNo + r.fullName + r.firstName + r.lastName).toLowerCase().replace(/\s+/g, '').indexOf(q) === -1) return false;
+            return true;
+          });
+          var counts = { STUDYING: 0, TRANSFERRED: 0, GRADUATED: 0 };
+          data.rows.forEach(function (r) { counts[r.enrollStatus] = (counts[r.enrollStatus] || 0) + 1; });
+          clear(summary);
+          summary.appendChild(App.badge('ทั้งหมด ' + data.rows.length + ' คน'));
+          STATUS_OPTIONS.forEach(function (o) { summary.appendChild(App.badge(o.label + ' ' + (counts[o.value] || 0), STATUS_KIND[o.value])); });
+          if (rows.length !== data.rows.length) summary.appendChild(App.badge('แสดง ' + rows.length + ' คน', 'FINANCE'));
+          var columns = [
+            { label: 'เลขประจำตัว', render: function (r) { return h('span', { class: 'mono', text: r.studentNo }); } },
+            { label: 'ชื่อ-นามสกุล', key: 'fullName' },
+            { label: 'ชั้น/ห้อง', key: 'classLabel', className: 'nowrap' },
+            { label: 'เลขที่', key: 'classNo' },
+            { label: 'สถานะ', render: function (r) { return App.badge(r.enrollStatusLabel, STATUS_KIND[r.enrollStatus]); } },
+          ];
+          if (canManage()) {
+            columns.push({ label: 'จัดการ', className: 'actions', render: function (r) {
+              return [
+                button('แก้ไข', 'secondary btn-sm', function () { openStudentForm(ctx, r); }, 'edit'),
+                button('สถานะ', 'secondary btn-sm', function () { openStatusForm(ctx, r); }, 'flag'),
+              ];
+            } });
+          }
+          clear(list).appendChild(App.table({
+            rows: rows,
+            columns: columns,
+            onRowClick: openStudentDetail,
+            empty: data.rows.length ? 'ไม่พบนักเรียนตามเงื่อนไข' : 'ยังไม่มีข้อมูลนักเรียนในปีการศึกษานี้' + (canManage() ? ' กด "นำเข้าจาก Excel/CSV" หรือ "เพิ่มนักเรียน"' : ''),
+          }));
+        }
+
+        yearSel.input.addEventListener('change', function () { App.go('students', { year: Number(yearSel.input.value) }); });
+        gradeSel.input.addEventListener('change', function () { f.grade = gradeSel.input.value; fillRooms(); draw(); });
+        roomSel.input.addEventListener('change', function () { f.room = roomSel.input.value; draw(); });
+        statusSel.input.addEventListener('change', function () { f.status = statusSel.input.value; draw(); });
+        search.input.addEventListener('input', function () { f.q = search.input.value; draw(); });
+        fillRooms();
+        draw();
+
+        var actions = canManage() ? [
+          button('เพิ่มนักเรียน', '', function () { openStudentForm(ctx, null); }, 'plus'),
+          button('นำเข้าจาก Excel/CSV', 'secondary', function () { App.go('students-import', { year: data.year }); }, 'upload'),
+          button('เลื่อนชั้นขึ้นปีใหม่', 'secondary', function () { App.go('students-promote', { fromYear: data.year }); }, 'arrowUp'),
+        ] : null;
+        return h('div', null,
+          h('div', { class: 'page-head' },
+            h('div', null, h('h1', { text: 'นักเรียน' }), h('p', { text: 'ปีการศึกษา ' + data.year + ' · คลิกชื่อเพื่อดูประวัติชั้นเรียน' })),
+            actions ? h('div', { class: 'toolbar', style: { marginBottom: '0' } }, actions) : null),
+          h('div', { class: 'card' }, h('div', { class: 'card-body' },
+            h('div', { class: 'toolbar' }, yearSel.wrap, gradeSel.wrap, roomSel.wrap, statusSel.wrap, search.wrap),
+            summary, list)));
+      });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // อ่านไฟล์ Excel (.xlsx) ในเบราว์เซอร์ (ไม่ส่งไฟล์ออกไปที่ใด และไม่ใช้ไลบรารีภายนอก)
+  // ---------------------------------------------------------------------------
+  function u16(b, o) { return b[o] | (b[o + 1] << 8); }
+  function u32(b, o) { return (b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24)) >>> 0; }
+
+  function inflateRaw(bytes) {
+    if (typeof DecompressionStream === 'undefined') return Promise.reject(new Error('NO_DECOMPRESSION'));
+    var stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).arrayBuffer().then(function (buf) { return new Uint8Array(buf); });
+  }
+
+  function openZip(buf) {
+    var eocd = -1;
+    for (var i = buf.length - 22; i >= Math.max(0, buf.length - 65557); i--) {
+      if (u32(buf, i) === 0x06054b50) { eocd = i; break; }
+    }
+    if (eocd < 0) throw new Error('NOT_ZIP');
+    var count = u16(buf, eocd + 10);
+    var ptr = u32(buf, eocd + 16);
+    var entries = {};
+    var decoder = new TextDecoder('utf-8');
+    for (var n = 0; n < count; n++) {
+      if (u32(buf, ptr) !== 0x02014b50) throw new Error('BAD_ZIP');
+      var nameLen = u16(buf, ptr + 28);
+      var name = decoder.decode(buf.subarray(ptr + 46, ptr + 46 + nameLen));
+      entries[name] = { method: u16(buf, ptr + 10), size: u32(buf, ptr + 20), offset: u32(buf, ptr + 42) };
+      ptr += 46 + nameLen + u16(buf, ptr + 30) + u16(buf, ptr + 32);
+    }
+    return {
+      has: function (name) { return Object.prototype.hasOwnProperty.call(entries, name); },
+      names: function () { return Object.keys(entries); },
+      read: function (name) {
+        var e = entries[name];
+        if (!e || u32(buf, e.offset) !== 0x04034b50) return Promise.reject(new Error('BAD_ZIP'));
+        var start = e.offset + 30 + u16(buf, e.offset + 26) + u16(buf, e.offset + 28);
+        var data = buf.subarray(start, start + e.size);
+        var raw = e.method === 0 ? Promise.resolve(data) : (e.method === 8 ? inflateRaw(data) : Promise.reject(new Error('BAD_ZIP')));
+        return raw.then(function (bytes) { return decoder.decode(bytes); });
+      },
+    };
+  }
+
+  function parseXml(text) {
+    var doc = new DOMParser().parseFromString(text, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) throw new Error('BAD_XML');
+    return doc;
+  }
+  function byTag(node, tag) { return Array.prototype.slice.call(node.getElementsByTagNameNS('*', tag)); }
+  function columnIndex(ref) {
+    var letters = /^[A-Z]+/.exec(ref);
+    if (!letters) return -1;
+    var n = 0;
+    for (var i = 0; i < letters[0].length; i++) n = n * 26 + (letters[0].charCodeAt(i) - 64);
+    return n - 1;
+  }
+
+  /** อ่านแผ่นงานแรกของไฟล์ .xlsx เป็นตาราง (array ของแถว) */
+  App.readXlsx = function (file) {
+    var zip;
+    var sheetPath = 'xl/worksheets/sheet1.xml';
+    var shared = [];
+    return file.arrayBuffer().then(function (ab) {
+      zip = openZip(new Uint8Array(ab));
+      if (!zip.has('xl/workbook.xml')) return null;
+      return zip.read('xl/workbook.xml').then(function (wbText) {
+        var sheet = byTag(parseXml(wbText), 'sheet')[0];
+        var rid = sheet ? (sheet.getAttribute('r:id') || sheet.getAttributeNS('http://schemas.openxmlformats.org/officeDocument/2006/relationships', 'id')) : '';
+        if (!rid || !zip.has('xl/_rels/workbook.xml.rels')) return null;
+        return zip.read('xl/_rels/workbook.xml.rels').then(function (relText) {
+          byTag(parseXml(relText), 'Relationship').forEach(function (rel) {
+            if (rel.getAttribute('Id') !== rid) return;
+            var target = rel.getAttribute('Target') || '';
+            sheetPath = target.charAt(0) === '/' ? target.slice(1) : 'xl/' + target.replace(/^\.\//, '');
+          });
+        });
+      });
+    }).then(function () {
+      if (!zip.has(sheetPath)) {
+        sheetPath = zip.names().filter(function (n) { return /^xl\/worksheets\/[^/]+\.xml$/.test(n); }).sort()[0];
+      }
+      if (!sheetPath) throw new Error('NO_SHEET');
+      if (!zip.has('xl/sharedStrings.xml')) return null;
+      return zip.read('xl/sharedStrings.xml').then(function (ssText) {
+        byTag(parseXml(ssText), 'si').forEach(function (si) {
+          shared.push(byTag(si, 't').map(function (t) { return t.textContent; }).join(''));
+        });
+      });
+    }).then(function () {
+      return zip.read(sheetPath);
+    }).then(function (sheetText) {
+      var rows = [];
+      byTag(parseXml(sheetText), 'row').forEach(function (rowEl) {
+        var values = [];
+        byTag(rowEl, 'c').forEach(function (c) {
+          var ref = c.getAttribute('r');
+          var idx = ref ? columnIndex(ref) : values.length;
+          var type = c.getAttribute('t');
+          var v = byTag(c, 'v')[0];
+          var text = '';
+          if (type === 's') text = shared[Number(v ? v.textContent : -1)] || '';
+          else if (type === 'inlineStr') text = byTag(c, 't').map(function (t) { return t.textContent; }).join('');
+          else if (type === 'b') text = v && v.textContent === '1' ? 'TRUE' : 'FALSE';
+          else text = v ? v.textContent : '';
+          while (values.length < idx) values.push('');
+          values[idx] = text;
+        });
+        rows.push(values);
+      });
+      return rows.filter(function (r) { return r.some(function (x) { return String(x).trim() !== ''; }); });
+    });
+  };
+
+  /** อ่านไฟล์ CSV: ลอง UTF-8 ก่อน ถ้าไม่ใช่ใช้ Windows-874 (ภาษาไทยจาก Excel รุ่นเก่า) */
+  App.readCsv = function (file) {
+    return file.arrayBuffer().then(function (ab) {
+      var text;
+      try {
+        text = new TextDecoder('utf-8', { fatal: true }).decode(ab);
+      } catch (e) {
+        text = new TextDecoder('windows-874').decode(ab);
+      }
+      return parseDelimitedText_(text);
+    });
+  };
+
+  function fileErrorMessage(err, name) {
+    var code = err && err.message;
+    if (/\.xls$/i.test(name)) return 'ไฟล์ .xls (Excel รุ่นเก่า) ยังอ่านไม่ได้ กรุณาเปิดใน Excel แล้วบันทึกเป็น .xlsx หรือ CSV หรือคัดลอกตารางมาวาง';
+    if (code === 'NO_DECOMPRESSION') return 'เบราว์เซอร์นี้อ่านไฟล์ .xlsx ไม่ได้ กรุณาบันทึกไฟล์เป็น CSV หรือคัดลอกตารางจาก Excel มาวาง';
+    return 'อ่านไฟล์ไม่สำเร็จ กรุณาตรวจว่าเป็นไฟล์ .xlsx หรือ .csv หรือคัดลอกตารางจาก Excel มาวาง';
+  }
+
+  function downloadTemplate() {
+    var lines = [
+      'เลขประจำตัวนักเรียน,คำนำหน้า,ชื่อ,นามสกุล,ระดับชั้น,ห้อง,เลขที่',
+      '12345,เด็กชาย,สมชาย,ใจดี,ป.1,1,1',
+      '12346,เด็กหญิง,สมใจ,รักเรียน,ป.1,1,2',
+    ];
+    var blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8' });
+    var url = URL.createObjectURL(blob);
+    var a = h('a', { href: url, download: 'แบบฟอร์มนำเข้านักเรียน.csv' });
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 10000);
+  }
+
+  // ---------------------------------------------------------------------------
+  // นำเข้าข้อมูลนักเรียน
+  // ---------------------------------------------------------------------------
+  var MAP_FIELDS = [
+    { key: 'studentNo', label: 'เลขประจำตัวนักเรียน', need: true },
+    { key: 'prefix', label: 'คำนำหน้า' },
+    { key: 'firstName', label: 'ชื่อ' },
+    { key: 'lastName', label: 'นามสกุล' },
+    { key: 'fullName', label: 'ชื่อ-นามสกุล (ใช้แทนชื่อและนามสกุล)' },
+    { key: 'gradeLevel', label: 'ระดับชั้น' },
+    { key: 'room', label: 'ห้อง' },
+    { key: 'gradeRoom', label: 'ชั้น/ห้อง เช่น ป.1/2 (ใช้แทนระดับชั้นและห้อง)' },
+    { key: 'classNo', label: 'เลขที่' },
+  ];
+  var IMPORT_KIND = {
+    NEW: 'success', ENROLL: 'success', SAME: 'muted', UPDATE: 'warning', CONFLICT: 'danger',
+    NAME_DUPLICATE: 'warning', DUPLICATE_IN_FILE: 'danger', INVALID: 'danger',
+  };
+  var IMPORT_ORDER = ['INVALID', 'DUPLICATE_IN_FILE', 'CONFLICT', 'NAME_DUPLICATE', 'UPDATE', 'NEW', 'ENROLL', 'SAME'];
+
+  App.defineRoute('students-import', {
+    title: 'นำเข้าข้อมูลนักเรียน',
+    roles: [MANAGE],
+    render: function (params) {
+      return App.api('years.list').then(function (years) {
+        var openYears = years.filter(function (y) { return y.status === 'OPEN'; });
+        var state = { table: null, header: null, mapping: null, fileName: '', preview: null };
+        var wantYear = params.year || App.state.me.school.currentAcademicYear;
+        var yearSel = App.field({ label: 'นำเข้าเป็นข้อมูลปีการศึกษา', type: 'select',
+          options: openYears.map(function (y) { return { value: String(y.year), label: y.label }; }),
+          value: String(openYears.some(function (y) { return y.year === wantYear; }) ? wantYear : (openYears[0] ? openYears[0].year : '')) });
+        var fileInput = h('input', { type: 'file', class: 'input', accept: '.xlsx,.csv,.txt,text/csv', id: 'student-file' });
+        var paste = App.field({ label: 'หรือคัดลอกตารางจาก Excel แล้ววางที่นี่ (รวมแถวหัวตาราง)', type: 'textarea', rows: 5, span2: true });
+        var readError = h('div', { class: 'alert alert-error hidden', role: 'alert' });
+        var mappingBox = h('div');
+        var previewBox = h('div');
+
+        function setError(box, text) { box.textContent = text; box.classList.toggle('hidden', !text); }
+
+        function useTable(rows, fileName) {
+          state.preview = null;
+          clear(previewBox);
+          var found = findStudentHeaderRow_(rows);
+          if (!found) {
+            setError(readError, 'ไม่พบแถวหัวตาราง กรุณาให้แถวแรกเป็นชื่อคอลัมน์ เช่น เลขประจำตัวนักเรียน ชื่อ นามสกุล ระดับชั้น ห้อง เลขที่');
+            clear(mappingBox);
+            return;
+          }
+          setError(readError, '');
+          state.table = rows.slice(found.index + 1);
+          state.header = rows[found.index];
+          state.mapping = found.columns;
+          state.fileName = fileName;
+          renderMapping();
+        }
+
+        function renderMapping() {
+          var headerOptions = [{ value: '-1', label: '(ไม่มี)' }].concat(state.header.map(function (name, i) {
+            return { value: String(i), label: 'คอลัมน์ ' + (i + 1) + ': ' + (String(name).trim() || '(ไม่มีชื่อ)') };
+          }));
+          var grid = h('div', { class: 'form-grid' });
+          var selects = {};
+          MAP_FIELDS.forEach(function (fdef) {
+            var f = App.field({ label: fdef.label, type: 'select', options: headerOptions, value: String(state.mapping[fdef.key]), required: fdef.need });
+            f.input.addEventListener('change', function () { state.mapping[fdef.key] = Number(f.input.value); });
+            selects[fdef.key] = f;
+            grid.appendChild(f.wrap);
+          });
+          var sample = state.table.slice(0, 3).map(function (r) { return r.join(' | '); });
+          var mapError = h('div', { class: 'alert alert-error hidden', role: 'alert' });
+          var checkBtn = button('ตรวจสอบข้อมูล', '', function () {
+            var m = state.mapping;
+            var problems = [];
+            if (m.studentNo === -1) problems.push('เลือกคอลัมน์เลขประจำตัวนักเรียน');
+            if (m.firstName === -1 && m.fullName === -1) problems.push('เลือกคอลัมน์ชื่อ หรือคอลัมน์ชื่อ-นามสกุล');
+            if (m.gradeLevel === -1 && m.gradeRoom === -1) problems.push('เลือกคอลัมน์ระดับชั้น หรือคอลัมน์ชั้น/ห้อง');
+            if (problems.length) { setError(mapError, 'กรุณา' + problems.join(' และ')); return; }
+            setError(mapError, '');
+            runPreview({ updateExisting: false, acceptNameDuplicates: false });
+          }, 'search');
+          clear(mappingBox).appendChild(h('div', { class: 'card' },
+            h('div', { class: 'card-head' }, h('h2', { text: '2. ตรวจคอลัมน์ที่ระบบจับคู่ให้' })),
+            h('div', { class: 'card-body stack' },
+              h('div', { class: 'alert alert-info', text: 'พบข้อมูล ' + state.table.length + ' แถว' + (state.fileName ? ' จาก ' + state.fileName : '') +
+                ' ระบบจับคู่คอลัมน์จากหัวตารางให้แล้ว ถ้าไม่ถูกต้องให้เลือกใหม่' }),
+              grid,
+              h('div', null, h('div', { class: 'help', text: 'ตัวอย่างข้อมูล 3 แถวแรก:' }),
+                sample.map(function (line) { return h('div', { class: 'mono small', text: line }); })),
+              mapError,
+              h('div', null, checkBtn))));
+          mappingBox.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
+
+        function buildRows() {
+          var m = state.mapping;
+          var cell = function (r, idx) { return idx >= 0 && idx < r.length ? String(r[idx]) : ''; };
+          return state.table.map(function (r, i) {
+            var out = { rowNo: i + 1 };
+            MAP_FIELDS.forEach(function (fdef) { out[fdef.key] = cell(r, m[fdef.key]); });
+            return out;
+          });
+        }
+
+        function runPreview(options) {
+          var payload = Object.assign({ year: Number(yearSel.input.value), rows: buildRows(), fileName: state.fileName }, options);
+          return App.api('students.importPreview', payload).then(function (res) {
+            state.preview = res;
+            renderPreview(res, payload);
+          }).catch(function (err) {
+            if (err && err.handled) return;
+            clear(previewBox).appendChild(h('div', { class: 'alert alert-error', role: 'alert', text: err.message }));
+          });
+        }
+
+        function renderPreview(res, payload) {
+          var c = res.counts;
+          var chips = h('div', { class: 'toolbar', style: { gap: '8px' } });
+          IMPORT_ORDER.forEach(function (k) {
+            if (c[k]) chips.appendChild(App.badge(res.labels[k] + ' ' + c[k], IMPORT_KIND[k]));
+          });
+          var optUpdate = App.field({ type: 'checkbox', label: 'ปรับปรุงข้อมูลนักเรียนเดิมตามไฟล์ (' + (c.UPDATE + c.CONFLICT) + ' รายการ)',
+            value: res.options.updateExisting, help: 'ใช้เมื่อแน่ใจว่าไฟล์ถูกต้องกว่าข้อมูลในระบบ ระบบเก็บค่าเดิมไว้ในประวัติการใช้งาน' });
+          var optDup = App.field({ type: 'checkbox', label: 'ยืนยันนำเข้านักเรียนที่ชื่อซ้ำกับนักเรียนเดิม (' + c.NAME_DUPLICATE + ' รายการ)',
+            value: res.options.acceptNameDuplicates, help: 'เลือกเฉพาะเมื่อตรวจแล้วว่าเป็นคนละคน' });
+          optUpdate.input.disabled = !(c.UPDATE + c.CONFLICT);
+          optDup.input.disabled = !c.NAME_DUPLICATE;
+          var rerun = function () { runPreview({ updateExisting: optUpdate.input.checked, acceptNameDuplicates: optDup.input.checked }); };
+          optUpdate.input.addEventListener('change', rerun);
+          optDup.input.addEventListener('change', rerun);
+
+          var showAll = App.field({ type: 'checkbox', label: 'แสดงทุกแถว (ปกติแสดงเฉพาะแถวที่ต้องตรวจ)' });
+          var tableBox = h('div');
+          function drawRows() {
+            var rows = res.rows.filter(function (r) { return showAll.input.checked || ['NEW', 'ENROLL', 'SAME'].indexOf(r.status) === -1; })
+              .sort(function (a, b) { return IMPORT_ORDER.indexOf(a.status) - IMPORT_ORDER.indexOf(b.status) || a.rowNo - b.rowNo; });
+            clear(tableBox).appendChild(App.table({
+              rows: rows,
+              empty: 'ไม่มีแถวที่ต้องตรวจ ข้อมูลพร้อมนำเข้า',
+              columns: [
+                { label: 'ลำดับ', key: 'rowNo' },
+                { label: 'ผลตรวจ', render: function (r) {
+                  return h('div', null, App.badge(r.statusLabel, IMPORT_KIND[r.status]), ' ', r.applies ? App.badge('จะบันทึก', 'FINANCE') : null);
+                } },
+                { label: 'เลขประจำตัว', render: function (r) { return h('span', { class: 'mono', text: r.studentNo }); } },
+                { label: 'ชื่อ-นามสกุล', key: 'fullName' },
+                { label: 'ชั้น/ห้อง', key: 'classLabel' },
+                { label: 'เลขที่', key: 'classNo' },
+                { label: 'รายละเอียด', render: function (r) {
+                  return h('div', null, r.messages.map(function (m) { return h('div', { text: m }); }),
+                    r.changes.map(function (m) { return h('div', { class: 'muted small', text: m }); }));
+                } },
+              ],
+            }));
+          }
+          showAll.input.addEventListener('change', drawRows);
+          drawRows();
+
+          var commitBtn = button('นำเข้า ' + c.apply + ' รายการ', '', function () {
+            App.confirm('นำเข้าข้อมูล ' + c.apply + ' รายการเป็นข้อมูลปีการศึกษา ' + res.year + '? แถวที่ไม่ผ่านการตรวจจะถูกข้าม', { confirmLabel: 'นำเข้า' })
+              .then(function (ok) {
+                if (!ok) return null;
+                commitBtn.disabled = true;
+                return App.api('students.importCommit', payload).then(function (r) {
+                  App.toast('นำเข้าข้อมูลเรียบร้อยแล้ว', 'success');
+                  clear(mappingBox);
+                  clear(previewBox).appendChild(h('div', { class: 'card' },
+                    h('div', { class: 'card-head' }, h('h2', { text: 'นำเข้าข้อมูลเรียบร้อย' })),
+                    h('div', { class: 'card-body stack' },
+                      h('div', { class: 'grid-cards' },
+                        stat('เพิ่มนักเรียนใหม่', r.created), stat('เพิ่มชั้นเรียนปีนี้', r.enrolled),
+                        stat('ปรับปรุงข้อมูล', r.updated), stat('ไม่เปลี่ยนแปลง', r.unchanged), stat('ข้าม', r.skipped)),
+                      h('div', null, button('ดูรายชื่อนักเรียน ปีการศึกษา ' + r.year, '', function () { App.go('students', { year: r.year }); }, 'student')))));
+                });
+              })
+              .catch(App.fail)
+              .then(function () { commitBtn.disabled = false; });
+          }, 'upload');
+          commitBtn.disabled = c.apply === 0;
+
+          clear(previewBox).appendChild(h('div', { class: 'card' },
+            h('div', { class: 'card-head' }, h('h2', { text: '3. ผลการตรวจสอบ (ยังไม่ได้บันทึก)' })),
+            h('div', { class: 'card-body stack' },
+              chips,
+              h('div', { class: 'form-grid' }, optUpdate.wrap, optDup.wrap),
+              showAll.wrap,
+              tableBox,
+              h('div', { class: 'toolbar', style: { justifyContent: 'flex-end', marginBottom: '0' } },
+                h('span', { class: 'muted small', text: 'จะบันทึก ' + c.apply + ' จาก ' + c.total + ' แถว' }), commitBtn))));
+          previewBox.scrollIntoView({ block: 'start', behavior: 'smooth' });
+        }
+
+        function stat(label, value) {
+          return h('div', { class: 'card stat' }, h('div', { class: 'stat-label', text: label }), h('div', { class: 'stat-value', text: String(value) }));
+        }
+
+        fileInput.addEventListener('change', function () {
+          var file = fileInput.files && fileInput.files[0];
+          if (!file) return;
+          setError(readError, '');
+          var reader = /\.xlsx$/i.test(file.name) ? App.readXlsx(file) : (/\.xls$/i.test(file.name) ? Promise.reject(new Error('XLS')) : App.readCsv(file));
+          reader.then(function (rows) { useTable(rows, file.name); })
+            .catch(function (err) { setError(readError, fileErrorMessage(err, file.name)); });
+        });
+        var pasteBtn = button('อ่านข้อมูลที่วาง', 'secondary', function () {
+          if (!paste.input.value.trim()) { setError(readError, 'กรุณาวางข้อมูลก่อน'); return; }
+          useTable(parseDelimitedText_(paste.input.value), 'ข้อมูลที่วาง');
+        });
+        var templateBtn = button('ดาวน์โหลดแบบฟอร์ม CSV', 'ghost', downloadTemplate);
+
+        if (!openYears.length) {
+          return h('div', { class: 'alert alert-warning', text: 'ยังไม่มีปีการศึกษาที่เปิดอยู่ กรุณาให้ผู้ดูแลระบบเพิ่มปีการศึกษาก่อน' });
+        }
+        return h('div', null,
+          h('div', { class: 'page-head' },
+            h('div', null, h('h1', { text: 'นำเข้าข้อมูลนักเรียน' }),
+              h('p', { text: 'ระบบตรวจข้อมูลและแสดงผลก่อนเสมอ ยังไม่บันทึกจนกว่าจะกดยืนยัน นำเข้าไฟล์เดิมซ้ำได้โดยไม่เกิดข้อมูลซ้ำ' })),
+            button('กลับไปรายชื่อนักเรียน', 'secondary', function () { App.go('students'); })),
+          h('div', { class: 'card' },
+            h('div', { class: 'card-head' }, h('h2', { text: '1. เลือกปีการศึกษาและข้อมูล' })),
+            h('div', { class: 'card-body stack' },
+              h('div', { class: 'form-grid' }, yearSel.wrap,
+                h('div', { class: 'field' }, h('label', { for: 'student-file', text: 'ไฟล์ Excel (.xlsx) หรือ CSV' }), fileInput,
+                  h('div', { class: 'help', text: 'ใช้แผ่นงานแรกของไฟล์ ไฟล์ไม่ถูกส่งไปเก็บที่ใด ระบบอ่านในเครื่องนี้แล้วส่งเฉพาะข้อมูลในตาราง' })),
+                paste.wrap),
+              h('div', { class: 'toolbar', style: { marginBottom: '0' } }, pasteBtn, templateBtn),
+              h('div', { class: 'help', text: 'หัวตารางที่รู้จัก: เลขประจำตัวนักเรียน, คำนำหน้า, ชื่อ, นามสกุล (หรือ ชื่อ-นามสกุล), ระดับชั้น, ห้อง (หรือ ชั้น/ห้อง), เลขที่' }),
+              readError)),
+          mappingBox,
+          previewBox);
+      });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // เลื่อนชั้นขึ้นปีการศึกษาใหม่
+  // ---------------------------------------------------------------------------
+  App.defineRoute('students-promote', {
+    title: 'เลื่อนชั้นขึ้นปีการศึกษาใหม่',
+    roles: [MANAGE],
+    render: function (params) {
+      return App.api('years.list').then(function (years) {
+        var sorted = years.slice().sort(function (a, b) { return a.year - b.year; });
+        var from = params.fromYear || App.state.me.school.currentAcademicYear;
+        var fromSel = App.field({ label: 'จากปีการศึกษา', type: 'select', value: String(from),
+          options: sorted.map(function (y) { return { value: String(y.year), label: y.label }; }) });
+        var toSel = App.field({ label: 'ไปปีการศึกษา', type: 'select' });
+        var gradDate = App.field({ label: 'วันที่จบการศึกษา (ชั้นสุดท้าย)', type: 'date', value: todayIso() });
+        var result = h('div');
+        var notice = h('div', { class: 'alert alert-warning hidden' });
+
+        function fillTo() {
+          var f = Number(fromSel.input.value);
+          var targets = sorted.filter(function (y) { return y.year > f && y.status === 'OPEN'; });
+          clear(toSel.input);
+          targets.forEach(function (y) { toSel.input.appendChild(h('option', { value: String(y.year), text: y.label })); });
+          notice.textContent = targets.length ? '' : 'ยังไม่มีปีการศึกษา ' + (f + 1) + ' ในระบบ กรุณาให้ผู้ดูแลระบบเพิ่มปีการศึกษาใหม่ก่อน';
+          notice.classList.toggle('hidden', !!targets.length);
+          previewBtn.disabled = !targets.length;
+          clear(result);
+        }
+
+        var previewBtn = button('ดูตัวอย่างการเลื่อนชั้น', '', function () {
+          var payload = { fromYear: Number(fromSel.input.value), toYear: Number(toSel.input.value), graduationDate: gradDate.input.value };
+          App.api('students.promotePreview', payload).then(function (p) {
+            var groupsTable = App.table({
+              rows: p.groups,
+              empty: 'ไม่มีนักเรียนที่ต้องเลื่อนชั้น',
+              columns: [
+                { label: 'ชั้นปีการศึกษา ' + p.fromYear, key: 'fromGrade' },
+                { label: 'ปีการศึกษา ' + p.toYear, render: function (g) { return g.graduate ? App.badge('จบการศึกษา', 'muted') : g.toGrade; } },
+                { label: 'จำนวน (คน)', key: 'count' },
+              ],
+            });
+            var skipped = p.skipped.length ? [h('h3', { text: 'ข้าม ' + p.skipped.length + ' คน' }), App.table({
+              rows: p.skipped,
+              columns: [
+                { label: 'เลขประจำตัว', key: 'studentNo' },
+                { label: 'ชื่อ-นามสกุล', key: 'fullName' },
+                { label: 'ชั้น/ห้อง', key: 'classLabel' },
+                { label: 'เหตุผล', key: 'reason' },
+              ],
+            })] : null;
+            var commitBtn = button('ยืนยันเลื่อนชั้น ' + p.promote + ' คน และจบการศึกษา ' + p.graduate + ' คน', '', function () {
+              App.confirm('ยืนยันการเลื่อนชั้นจากปีการศึกษา ' + p.fromYear + ' เป็น ' + p.toYear + '? ข้อมูลปีเดิมไม่ถูกลบ', { confirmLabel: 'ยืนยันเลื่อนชั้น' })
+                .then(function (ok) {
+                  if (!ok) return null;
+                  commitBtn.disabled = true;
+                  return App.api('students.promoteCommit', payload).then(function (r) {
+                    App.toast('เลื่อนชั้นเรียบร้อยแล้ว', 'success');
+                    clear(result).appendChild(h('div', { class: 'card' }, h('div', { class: 'card-body stack' },
+                      h('div', { class: 'alert alert-success', text: 'เลื่อนชั้น ' + r.promoted + ' คน · จบการศึกษา ' + r.graduated + ' คน · ข้าม ' + r.skipped + ' คน' }),
+                      r.classNoCleared ? h('div', { class: 'alert alert-warning', text: 'มี ' + r.classNoCleared + ' คนที่เลขที่เดิมซ้ำกับนักเรียนในปีใหม่ ระบบเว้นเลขที่ไว้ กรุณาแก้ไขภายหลัง' }) : null,
+                      h('div', { class: 'alert alert-info', text: 'เมื่อเปิดภาคเรียนใหม่ แจ้งผู้ดูแลระบบให้ตั้งปีการศึกษา ' + r.toYear + ' เป็นปีปัจจุบัน' }),
+                      h('div', null, button('ดูรายชื่อนักเรียน ปีการศึกษา ' + r.toYear, '', function () { App.go('students', { year: r.toYear }); }, 'student')))));
+                  });
+                })
+                .catch(App.fail)
+                .then(function () { commitBtn.disabled = false; });
+            }, 'arrowUp');
+            commitBtn.disabled = !(p.promote + p.graduate);
+            clear(result).appendChild(h('div', { class: 'card' },
+              h('div', { class: 'card-head' }, h('h2', { text: 'ตัวอย่าง (ยังไม่ได้บันทึก)' })),
+              h('div', { class: 'card-body stack' },
+                groupsTable,
+                p.classNoCleared ? h('div', { class: 'alert alert-warning', text: p.classNoCleared + ' คนมีเลขที่ซ้ำกับนักเรียนในปีใหม่ ระบบจะเว้นเลขที่ไว้' }) : null,
+                skipped,
+                h('div', { class: 'help', text: 'ห้องและเลขที่คงเดิม แก้ไขภายหลังได้ หรือนำเข้ารายชื่อปีใหม่พร้อมเลือก "ปรับปรุงข้อมูลนักเรียนเดิม"' }),
+                h('div', null, commitBtn))));
+          }).catch(App.fail);
+        }, 'search');
+
+        fromSel.input.addEventListener('change', fillTo);
+        fillTo();
+        return h('div', null,
+          h('div', { class: 'page-head' },
+            h('div', null, h('h1', { text: 'เลื่อนชั้นขึ้นปีการศึกษาใหม่' }),
+              h('p', { text: 'นักเรียนที่กำลังศึกษาจะเลื่อนขึ้นชั้นถัดไปตามลำดับในตั้งค่า "ระดับชั้นที่เปิดสอน" ชั้นสุดท้ายจะเป็นจบการศึกษา ข้อมูลปีเดิมไม่ถูกลบ' })),
+            button('กลับไปรายชื่อนักเรียน', 'secondary', function () { App.go('students'); })),
+          h('div', { class: 'card' }, h('div', { class: 'card-body stack' },
+            h('div', { class: 'form-grid' }, fromSel.wrap, toSel.wrap, gradDate.wrap),
+            notice,
+            h('div', null, previewBtn))),
+          result);
+      });
+    },
+  });
+})();
+</script>
