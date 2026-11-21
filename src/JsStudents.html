@@ -55,8 +55,10 @@
         value: String(openYears.some(function (y) { return y.year === ctx.data.year; }) ? ctx.data.year : (openYears[0] ? openYears[0].year : '')) });
     }
     fields.push(
-      { key: 'gradeLevel', label: 'ระดับชั้น', type: 'select', required: true, options: ctx.data.gradeLevels.map(function (g) { return { value: g, label: g }; }),
-        value: editing ? student.gradeLevel : (App.state.studentFilters.grade || ctx.data.gradeLevels[0]) },
+      // เพิ่มนักเรียนใหม่: ไม่เลือกชั้นให้เอง (กันบันทึกผิดชั้นโดยไม่รู้ตัว) ยกเว้นกำลังดูรายชื่อชั้นใดชั้นหนึ่งอยู่
+      { key: 'gradeLevel', label: 'ระดับชั้น', type: 'select', required: true,
+        options: (editing ? [] : [{ value: '', label: '— เลือกระดับชั้น —' }]).concat(ctx.data.gradeLevels.map(function (g) { return { value: g, label: g }; })),
+        value: editing ? student.gradeLevel : (App.state.studentFilters.grade || '') },
       { key: 'room', label: 'ห้อง', maxlength: 10, value: editing ? student.room : (App.state.studentFilters.room || '1'), help: 'เช่น 1, 2 หรือ ก' },
       { key: 'classNo', label: 'เลขที่', type: 'number', min: 1, max: 999, inputmode: 'numeric', value: editing && student.classNo !== null ? student.classNo : '' });
 
@@ -163,7 +165,8 @@
         var roomSel = App.field({ label: 'ห้อง', type: 'select' });
         var statusSel = App.field({ label: 'สถานะ', type: 'select', value: f.status,
           options: [{ value: '', label: 'ทุกสถานะ' }].concat(STATUS_OPTIONS) });
-        var search = App.field({ label: 'ค้นหา', placeholder: 'ชื่อ นามสกุล หรือเลขประจำตัว', value: f.q });
+        var search = App.field({ label: 'ค้นหา', placeholder: 'ชื่อ หรือเลขประจำตัว', value: f.q });
+        search.wrap.classList.add('filter-wide');
         var summary = h('div', { class: 'toolbar', style: { gap: '8px', marginBottom: '12px' } });
         var list = h('div');
 
@@ -233,7 +236,7 @@
             h('div', null, h('h1', { text: 'นักเรียน' }), h('p', { text: 'ปีการศึกษา ' + data.year + ' · คลิกชื่อเพื่อดูประวัติชั้นเรียน' })),
             actions ? h('div', { class: 'toolbar', style: { marginBottom: '0' } }, actions) : null),
           h('div', { class: 'card' }, h('div', { class: 'card-body' },
-            h('div', { class: 'toolbar' }, yearSel.wrap, gradeSel.wrap, roomSel.wrap, statusSel.wrap, search.wrap),
+            h('div', { class: 'toolbar filter-bar' }, yearSel.wrap, gradeSel.wrap, roomSel.wrap, statusSel.wrap, search.wrap),
             summary, list)));
       });
     },
@@ -477,7 +480,7 @@
                 sample.map(function (line) { return h('div', { class: 'mono small', text: line }); })),
               mapError,
               h('div', null, checkBtn))));
-          mappingBox.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          App.scrollToEl(mappingBox);
         }
 
         function buildRows() {
@@ -575,7 +578,7 @@
               tableBox,
               h('div', { class: 'toolbar', style: { justifyContent: 'flex-end', marginBottom: '0' } },
                 h('span', { class: 'muted small', text: 'จะบันทึก ' + c.apply + ' จาก ' + c.total + ' แถว' }), commitBtn))));
-          previewBox.scrollIntoView({ block: 'start', behavior: 'smooth' });
+          App.scrollToEl(previewBox);
         }
 
         function stat(label, value) {

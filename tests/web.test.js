@@ -68,7 +68,9 @@ test('หน้าเว็บโหลดทรัพยากรภายน�
 });
 
 test('โค้ดหน้าเว็บไม่ใช้ innerHTML หรือ document.write กับข้อมูล (กัน XSS)', () => {
-  ['JsCore.html', 'JsViews.html', 'Index.html', 'AdminDialog.html'].forEach((file) => {
+  const files = fs.readdirSync(SRC_DIR).filter((f) => f.endsWith('.html'));
+  assert.ok(files.includes('JsStudents.html'), 'ต้องตรวจทุกไฟล์หน้าเว็บ รวมไฟล์ที่เพิ่มใหม่');
+  files.forEach((file) => {
     const src = fs.readFileSync(path.join(SRC_DIR, file), 'utf8');
     assert.doesNotMatch(src, /\.innerHTML\s*=|outerHTML\s*=|insertAdjacentHTML|document\.write|eval\(|new Function\(/, file);
   });

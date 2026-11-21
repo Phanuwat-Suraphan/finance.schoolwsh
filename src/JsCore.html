@@ -175,11 +175,21 @@
   // ---------------------------------------------------------------------------
   // แจ้งเตือน / หน้าต่าง / ยืนยัน
   // ---------------------------------------------------------------------------
+  /** ข้อความแจ้งเตือนมุมจอ: แสดงพร้อมกันไม่เกิน 3 ข้อความ คลิกเพื่อปิดได้ */
   App.toast = function (message, type) {
     var root = document.getElementById('toast-root');
-    var el = h('div', { class: 'toast' + (type ? ' toast-' + type : ''), text: message });
+    var el = h('div', { class: 'toast' + (type ? ' toast-' + type : ''), text: message, title: 'คลิกเพื่อปิด' });
+    var remove = function () { if (el.parentNode) el.parentNode.removeChild(el); };
+    el.addEventListener('click', remove);
+    while (root.children.length >= 3) root.removeChild(root.firstChild);
     root.appendChild(el);
-    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, type === 'error' ? 6500 : 4000);
+    setTimeout(remove, type === 'error' ? 6500 : 4000);
+  };
+
+  /** เลื่อนหน้าไปยังส่วนที่ต้องการ (ไม่ใช้ภาพเคลื่อนไหวถ้าผู้ใช้ตั้งค่าลดการเคลื่อนไหวไว้) */
+  App.scrollToEl = function (el) {
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    el.scrollIntoView({ block: 'start', behavior: reduce ? 'auto' : 'smooth' });
   };
 
   /** ล้างข้อความแจ้งเตือนและหน้าต่างที่ค้างอยู่ (ใช้เมื่อเปลี่ยนผู้ใช้ ไม่ให้ผู้ใช้คนถัดไปเห็นข้อความของคนก่อน) */
@@ -323,6 +333,17 @@
       if (submitting) return;
       var values = {};
       built.forEach(function (b) { values[b.key] = b.get(); });
+      // ช่องที่จำเป็นต้องกรอก: เตือนทันทีโดยไม่ต้องรอ Server (Server ยังตรวจซ้ำทุกครั้ง)
+      for (var i = 0; i < opts.fields.length; i++) {
+        var spec = opts.fields[i];
+        var v = values[spec.key];
+        if (spec.required && spec.type !== 'checkbox' && (v === null || v === undefined || String(v).trim() === '')) {
+          errorBox.textContent = (spec.type === 'select' ? 'กรุณาเลือก' : 'กรุณากรอก') + spec.label;
+          errorBox.classList.remove('hidden');
+          built[i].input.focus();
+          return;
+        }
+      }
       var btn = modal.buttons[modal.buttons.length - 1];
       var label = btn.textContent;
       submitting = true;

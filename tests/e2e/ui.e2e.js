@@ -11,6 +11,7 @@ const path = require('path');
 const fs = require('fs');
 const { chromium, devices } = require('playwright');
 const { createAppEnv } = require('../harness');
+const { makeXlsx } = require('./xlsx');
 
 const OUT_DIR = process.env.SCREENSHOT_DIR || path.join(__dirname, '..', '..', 'docs', 'screenshots');
 const APP_URL = 'https://app.test/';
@@ -71,6 +72,13 @@ async function openApp(browser, h, contextOptions) {
 async function shot(page, name, fullPage) {
   fs.mkdirSync(OUT_DIR, { recursive: true });
   await page.waitForTimeout(250);
+  // รอให้การเลื่อนหน้าแบบนุ่มนวลหยุดก่อนถ่ายภาพ
+  for (let i = 0, last = -1; i < 30; i++) {
+    const y = await page.evaluate(() => window.scrollY);
+    if (y === last) break;
+    last = y;
+    await page.waitForTimeout(100);
+  }
   await page.screenshot({ path: path.join(OUT_DIR, name + '.jpg'), type: 'jpeg', quality: 82, fullPage: !!fullPage });
 }
 
@@ -211,6 +219,101 @@ async function main() {
     // แม้แก้หน้าเว็บเองเพื่อเรียกคำสั่งของผู้ดูแลระบบ Server ก็ปฏิเสธ
     const forged = await p.evaluate(() => App.api('users.list').then(() => 'allowed', (e) => e.code + ':' + e.message));
     check(forged === 'FORBIDDEN:ไม่มีสิทธิ์ใช้งานคำสั่งนี้', 'เรียกคำสั่งของผู้ดูแลระบบจากหน้าเว็บโดยตรง ถูก Server ปฏิเสธ (' + forged + ')');
+
+    // ------------------------------------------------------------------ คอมพิวเตอร์: เจ้าหน้าที่การเงิน → ข้อมูลนักเรียน
+    await nav(p, 'นักเรียน');
+    await p.getByLabel('ปีการศึกษา').first().selectOption('2569');
+    await p.getByText('ยังไม่มีข้อมูลนักเรียนในปีการศึกษานี้').waitFor();
+    check(true, 'หน้านักเรียนแสดงข้อความเมื่อยังไม่มีข้อมูล');
+
+    await p.getByRole('button', { name: 'เพิ่มนักเรียน' }).click();
+    await modal.getByLabel(/^เลขประจำตัวนักเรียน/).fill('10001');
+    await modal.getByLabel('คำนำหน้าชื่อ').selectOption('เด็กชาย');
+    await modal.getByLabel(/^ชื่อ/).first().fill('สมชาย');
+    await modal.getByLabel('นามสกุล').fill('ใจดี');
+    check((await modal.getByLabel(/^ปีการศึกษา/).inputValue()) === '2569', 'ฟอร์มเพิ่มนักเรียนใช้ปีการศึกษาที่เลือกอยู่');
+    await modal.getByLabel(/^ระดับชั้น/).selectOption('ป.1');
+    await modal.getByLabel('ห้อง').fill('1');
+    await modal.getByLabel('เลขที่').fill('1');
+    await modal.getByRole('button', { name: 'บันทึก' }).click();
+    await toast(p, 'เพิ่มนักเรียน เด็กชายสมชาย ใจดี เรียบร้อยแล้ว');
+
+    await p.getByRole('button', { name: 'เพิ่มนักเรียน' }).click();
+    await modal.getByLabel(/^เลขประจำตัวนักเรียน/).fill('10099');
+    await modal.getByLabel(/^ชื่อ/).first().fill('สมชาย');
+    await modal.getByLabel('นามสกุล').fill('ใจดี');
+    await modal.getByLabel('ห้อง').fill('2');
+    await modal.getByRole('button', { name: 'บันทึก' }).click();
+    await modal.getByText('กรุณาเลือกระดับชั้น').waitFor();
+    check(true, 'เพิ่มนักเรียนใหม่ต้องเลือกระดับชั้นเอง ระบบไม่เลือกให้');
+    await modal.getByLabel(/^ระดับชั้น/).selectOption('ป.1');
+    await modal.getByRole('button', { name: 'บันทึก' }).click();
+    await p.getByText(/มีนักเรียนชื่อ เด็กชายสมชาย ใจดี อยู่แล้ว/).waitFor();
+    check(true, 'เพิ่มนักเรียนชื่อซ้ำ ระบบเตือนและให้ยืนยันก่อนบันทึก');
+    await p.getByRole('button', { name: 'ยืนยัน เป็นคนละคน' }).click();
+    await toast(p, 'เพิ่มนักเรียน สมชาย ใจดี เรียบร้อยแล้ว');
+
+    await p.getByRole('button', { name: 'นำเข้าจาก Excel/CSV' }).click();
+    await p.locator('#page-title', { hasText: 'นำเข้าข้อมูลนักเรียน' }).waitFor();
+    const xlsx = makeXlsx([
+      ['รายชื่อนักเรียน ปีการศึกษา 2569'],
+      ['ลำดับ', 'เลขประจำตัวนักเรียน', 'ชื่อ-นามสกุล', 'ชั้น/ห้อง', 'เลขที่'],
+      [1, 10001, 'เด็กชายสมชาย ใจดี', 'ป.1/1', 1],
+      [2, 20001, 'เด็กหญิงมานี มีนา', 'ป.1/1', 2],
+      [3, 20002, 'เด็กชายปิติ ยินดี', 'ประถมศึกษาปีที่ 6/1', 1],
+      [4, 20003, 'เด็กหญิงชูใจ เลิศล้ำ', 'ป.2/1', 1],
+      [5, 20004, 'เด็กชายวีระ กล้าหาญ', 'ม.1/1', 1],
+    ]);
+    await p.locator('#student-file').setInputFiles({ name: 'รายชื่อนักเรียน.xlsx', mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: xlsx });
+    await p.getByText('พบข้อมูล 5 แถว จาก รายชื่อนักเรียน.xlsx').waitFor();
+    check(true, 'อ่านไฟล์ .xlsx ในเบราว์เซอร์ได้ (หัวตารางอยู่แถวที่ 2)');
+    await p.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click();
+    await p.getByText('3. ผลการตรวจสอบ (ยังไม่ได้บันทึก)').waitFor();
+    check(await p.getByText(/ระดับชั้น "ม.1" ไม่อยู่ในรายการ/).isVisible(), 'ผลตรวจแสดงแถวที่ระดับชั้นไม่ถูกต้อง');
+    await shot(p, '13-import-preview');
+    await p.getByRole('button', { name: 'นำเข้า 3 รายการ' }).click();
+    await p.locator('.modal').getByRole('button', { name: 'นำเข้า', exact: true }).click();
+    await p.getByRole('heading', { name: 'นำเข้าข้อมูลเรียบร้อย' }).waitFor();
+    check(true, 'นำเข้าไฟล์ .xlsx: บันทึก 3 รายการ ข้ามแถวที่ไม่ถูกต้อง');
+
+    await p.getByRole('button', { name: 'ดูรายชื่อนักเรียน ปีการศึกษา 2569' }).click();
+    await p.locator('td', { hasText: 'มานี' }).waitFor();
+    await p.getByRole('button', { name: 'นำเข้าจาก Excel/CSV' }).click();
+    await p.getByLabel(/^หรือคัดลอกตารางจาก Excel/).fill('เลขประจำตัวนักเรียน\tคำนำหน้า\tชื่อ\tนามสกุล\tระดับชั้น\tห้อง\tเลขที่\n30001\tเด็กชาย\tกล้า\tหาญ\tป.2\t1\t2');
+    await p.getByRole('button', { name: 'อ่านข้อมูลที่วาง' }).click();
+    await p.getByRole('button', { name: 'ตรวจสอบข้อมูล' }).click();
+    await p.getByRole('button', { name: 'นำเข้า 1 รายการ' }).click();
+    await p.locator('.modal').getByRole('button', { name: 'นำเข้า', exact: true }).click();
+    await p.getByRole('heading', { name: 'นำเข้าข้อมูลเรียบร้อย' }).waitFor();
+    check(true, 'นำเข้าด้วยการคัดลอกตารางจาก Excel มาวาง');
+    await p.getByRole('button', { name: 'ดูรายชื่อนักเรียน ปีการศึกษา 2569' }).click();
+    await p.locator('td', { hasText: 'กล้า' }).waitFor();
+    check((await p.locator('.data-table tbody tr').count()) === 6, 'รายชื่อปี 2569 มีนักเรียน 6 คน');
+    await p.getByLabel('ค้นหา').fill('ยินดี');
+    check((await p.locator('.data-table tbody tr').count()) === 1, 'ค้นหาด้วยนามสกุลแล้วเหลือ 1 คน');
+    await p.getByLabel('ค้นหา').fill('');
+    await shot(p, '12-students');
+
+    await p.locator('.data-table tbody tr', { hasText: 'ชูใจ' }).getByRole('button', { name: 'สถานะ' }).click();
+    await modal.getByLabel('สถานะ').selectOption('TRANSFERRED');
+    await modal.getByLabel('หมายเหตุ').fill('ย้ายตามผู้ปกครองไปจังหวัดลำพูน');
+    await modal.getByRole('button', { name: 'บันทึก' }).click();
+    await toast(p, 'เปลี่ยนสถานะ เด็กหญิงชูใจ เลิศล้ำ เป็นย้ายออกแล้ว');
+    check((await p.locator('.data-table tbody tr').count()) === 5, 'ตัวกรองค่าเริ่มต้นแสดงเฉพาะผู้ที่กำลังศึกษา');
+
+    await p.getByRole('button', { name: 'เลื่อนชั้นขึ้นปีใหม่' }).click();
+    await p.locator('#page-title', { hasText: 'เลื่อนชั้นขึ้นปีการศึกษาใหม่' }).waitFor();
+    await p.getByLabel('จากปีการศึกษา').selectOption('2569');
+    await p.getByRole('button', { name: 'ดูตัวอย่างการเลื่อนชั้น' }).click();
+    await p.getByText('ตัวอย่าง (ยังไม่ได้บันทึก)').waitFor();
+    await shot(p, '14-promote');
+    await p.getByRole('button', { name: /ยืนยันเลื่อนชั้น 4 คน และจบการศึกษา 1 คน/ }).click();
+    await p.locator('.modal').getByRole('button', { name: 'ยืนยันเลื่อนชั้น' }).click();
+    await p.getByText('เลื่อนชั้น 4 คน · จบการศึกษา 1 คน · ข้าม 0 คน').waitFor();
+    check(true, 'เลื่อนชั้น 4 คน ชั้น ป.6 จบการศึกษา 1 คน ผู้ที่ย้ายออกไม่ถูกเลื่อน');
+    await p.getByRole('button', { name: 'ดูรายชื่อนักเรียน ปีการศึกษา 2570' }).click();
+    await p.locator('td', { hasText: 'ป.2/1' }).first().waitFor();
+    check((await p.locator('.data-table tbody tr').count()) === 4, 'ปีการศึกษา 2570 มีนักเรียนที่เลื่อนชั้นแล้ว 4 คน');
     await desk.context.close();
 
     // ------------------------------------------------------------------ มือถือ: ผู้อำนวยการ
@@ -233,6 +336,12 @@ async function main() {
     await m.locator('.data-table tbody tr').first().waitFor();
     check(await noHorizontalScroll(m), 'มือถือ: ตารางประวัติแสดงเป็นการ์ด ไม่มีแถบเลื่อนแนวนอน');
     await shot(m, '11-mobile-audit');
+    await m.getByRole('button', { name: 'เปิดเมนู' }).click();
+    await m.locator('.nav-item', { hasText: 'นักเรียน' }).click();
+    await m.locator('.data-table tbody tr').first().waitFor();
+    check(!(await m.getByRole('button', { name: 'เพิ่มนักเรียน' }).count()), 'ผู้อำนวยการดูรายชื่อนักเรียนได้ แต่ไม่มีปุ่มเพิ่มหรือนำเข้า');
+    check(await noHorizontalScroll(m), 'มือถือ: รายชื่อนักเรียนไม่มีแถบเลื่อนแนวนอน');
+    await shot(m, '15-mobile-students');
     await mobile.context.close();
   } finally {
     await browser.close();
