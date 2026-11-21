@@ -26,8 +26,8 @@ const APP = Object.freeze({
   NAME: 'ระบบบริหารจัดเก็บเงินบำรุงการศึกษา',
   SCHOOL_NAME: 'โรงเรียนวัดเสาหิน',
   PROVINCE: 'เชียงใหม่',
-  VERSION: '0.1.0',
-  RELEASE: 'ระยะที่ 1: โครงสร้างระบบและฐานข้อมูล',
+  VERSION: '0.2.0',
+  RELEASE: 'ระยะที่ 2: ระบบเข้าสู่ระบบและสิทธิ์',
   SCHEMA_VERSION: 1,
   TIMEZONE: 'Asia/Bangkok',
 });
@@ -39,9 +39,23 @@ const PROP_KEYS = Object.freeze({
   PASSWORD_PEPPER: 'PASSWORD_PEPPER',     // ค่าลับสำหรับแฮชรหัสผ่าน ห้ามแก้หรือลบ
   BACKUP_FOLDER_ID: 'BACKUP_FOLDER_ID',   // โฟลเดอร์สำรองข้อมูล (ระยะที่ 7)
   AUDIT_HEAD: 'AUDIT_HEAD',               // ตำแหน่งและ hash ล่าสุดของ AuditLogs ใช้ตรวจการลบแถวท้ายชีต
+  PASSWORD_HASH_ITERATIONS: 'PASSWORD_HASH_ITERATIONS', // จำนวนรอบแฮชรหัสผ่าน (ปรับตามความเร็วของเครื่อง Google ตอนติดตั้ง)
 });
 
 const AUTH_MODES = Object.freeze({ PASSWORD: 'PASSWORD', GOOGLE: 'GOOGLE' });
+
+/** นโยบายรหัสผ่านและการแฮช */
+const AUTH = Object.freeze({
+  HASH_VERSION: 'v1',
+  HASH_DEFAULT_ITERATIONS: 1000, // ใช้เมื่อยังไม่ได้วัดความเร็ว
+  HASH_MIN_ITERATIONS: 300,
+  HASH_MAX_ITERATIONS: 5000,
+  HASH_TARGET_MS: 250,           // เวลาที่ต้องการใช้แฮชรหัสผ่าน 1 ครั้ง (ยิ่งนาน ยิ่งเดารหัสยาก)
+  PASSWORD_MIN_LENGTH: 8,
+  PASSWORD_MAX_LENGTH: 128,
+  USERNAME_PATTERN: '^[a-z][a-z0-9._-]{2,31}$', // a-z ขึ้นต้น ตามด้วย a-z 0-9 . _ - รวม 3–32 ตัว
+  CACHE_MAX_SECONDS: 21600,     // ข้อจำกัดของ CacheService (6 ชั่วโมง)
+});
 
 const ROLES = Object.freeze({ ADMIN: 'ADMIN', FINANCE: 'FINANCE', DIRECTOR: 'DIRECTOR' });
 
@@ -52,6 +66,13 @@ const ROLE_LABELS = Object.freeze({
 });
 
 /** ผู้กระทำที่ไม่ใช่ผู้ใช้ในชีต Users (บันทึกลง AuditLogs) */
+/** ป้ายของผู้กระทำที่ไม่ใช่บทบาทผู้ใช้ (ใช้แสดงในประวัติการใช้งาน) */
+const ACTOR_ROLE_LABELS = Object.freeze({
+  OWNER: 'เจ้าของระบบ',
+  SYSTEM: 'ระบบ',
+  ANONYMOUS: 'ไม่ระบุตัวตน',
+});
+
 const ACTORS = Object.freeze({
   OWNER: Object.freeze({ userId: 'OWNER', username: 'owner', role: 'OWNER' }),
   SYSTEM: Object.freeze({ userId: 'SYSTEM', username: 'system', role: 'SYSTEM' }),
@@ -134,6 +155,27 @@ const AUDIT_ACTIONS = Object.freeze({
   BACKUP: 'BACKUP',
   RESTORE: 'RESTORE',
   INTEGRITY_CHECK: 'INTEGRITY_CHECK',
+  ACCESS_DENIED: 'ACCESS_DENIED',
+});
+
+const AUDIT_ACTION_LABELS = Object.freeze({
+  SETUP: 'ติดตั้ง/ตรวจโครงสร้าง',
+  CREATE: 'เพิ่ม',
+  UPDATE: 'แก้ไข',
+  CANCEL: 'ยกเลิก',
+  REQUEST: 'ยื่นคำขอ',
+  APPROVE: 'อนุมัติ',
+  REJECT: 'ไม่อนุมัติ',
+  LOGIN: 'เข้าสู่ระบบ',
+  LOGIN_FAILED: 'เข้าสู่ระบบไม่สำเร็จ',
+  LOGOUT: 'ออกจากระบบ',
+  PASSWORD_CHANGE: 'เปลี่ยน/รีเซ็ตรหัสผ่าน',
+  IMPORT: 'นำเข้าข้อมูล',
+  EXPORT: 'ส่งออกข้อมูล',
+  BACKUP: 'สำรองข้อมูล',
+  RESTORE: 'กู้คืนข้อมูล',
+  INTEGRITY_CHECK: 'ตรวจความถูกต้อง',
+  ACCESS_DENIED: 'ถูกปฏิเสธสิทธิ์',
 });
 
 const SHEETS = Object.freeze({
@@ -554,32 +596,44 @@ const SCHEMA = Object.freeze({
   },
 });
 
+/** กลุ่มของค่าตั้งค่า (ลำดับการแสดงในหน้าตั้งค่า) */
+const SETTINGS_GROUPS = Object.freeze([
+  { key: 'school', label: 'ข้อมูลโรงเรียน' },
+  { key: 'signers', label: 'ผู้ลงนามในเอกสาร' },
+  { key: 'academic', label: 'การเรียนการสอนและการรับเงิน' },
+  { key: 'approval', label: 'รายการที่ต้องให้ผู้อำนวยการอนุมัติ' },
+  { key: 'receipt', label: 'ใบเสร็จรับเงิน' },
+  { key: 'security', label: 'ความปลอดภัยในการเข้าสู่ระบบ' },
+  { key: 'backup', label: 'การสำรองข้อมูล' },
+]);
+
 /**
- * ค่าตั้งค่าเริ่มต้นใน SchoolSettings (SetupDatabase เพิ่มเฉพาะรายการที่ยังไม่มี ไม่เขียนทับค่าเดิม)
+ * ค่าตั้งค่าใน SchoolSettings (SetupDatabase เพิ่มเฉพาะรายการที่ยังไม่มี ไม่เขียนทับค่าเดิม)
  * type: text | int | bool | list (คั่นด้วยจุลภาค) | year (ปีการศึกษา พ.ศ.)
+ * readOnly: แก้ในหน้าตั้งค่าไม่ได้ (เปลี่ยนผ่านหน้าที่เกี่ยวข้องแทน)
  */
 const SETTINGS_DEFS = Object.freeze([
-  { key: 'SCHOOL_NAME', type: 'text', defaultValue: 'โรงเรียนวัดเสาหิน', description: 'ชื่อโรงเรียน (ใช้ในหัวเอกสาร)' },
-  { key: 'SCHOOL_ADDRESS', type: 'text', defaultValue: '', description: 'ที่อยู่โรงเรียน (ใช้ในหัวเอกสาร)' },
-  { key: 'SCHOOL_PROVINCE', type: 'text', defaultValue: 'เชียงใหม่', description: 'จังหวัด' },
-  { key: 'SCHOOL_AFFILIATION', type: 'text', defaultValue: '', description: 'หน่วยงานต้นสังกัด (กรอกตามจริง)' },
-  { key: 'DIRECTOR_NAME', type: 'text', defaultValue: '', description: 'ชื่อผู้อำนวยการ (ใช้ในช่องลงนาม)' },
-  { key: 'DIRECTOR_POSITION', type: 'text', defaultValue: 'ผู้อำนวยการโรงเรียนวัดเสาหิน', description: 'ตำแหน่งผู้อำนวยการ (ใช้ในช่องลงนาม)' },
-  { key: 'FINANCE_OFFICER_NAME', type: 'text', defaultValue: '', description: 'ชื่อเจ้าหน้าที่การเงิน (ใช้ในช่องลงนาม)' },
-  { key: 'FINANCE_OFFICER_POSITION', type: 'text', defaultValue: 'เจ้าหน้าที่การเงิน', description: 'ตำแหน่งเจ้าหน้าที่การเงิน (ใช้ในช่องลงนาม)' },
-  { key: 'CURRENT_ACADEMIC_YEAR', type: 'year', defaultValue: null, description: 'ปีการศึกษาปัจจุบัน (พ.ศ.) ค่าเริ่มต้นคำนวณจากวันที่ติดตั้ง' },
-  { key: 'GRADE_LEVELS', type: 'list', defaultValue: 'อ.1,อ.2,อ.3,ป.1,ป.2,ป.3,ป.4,ป.5,ป.6', description: 'ระดับชั้นที่เปิดสอน คั่นด้วยจุลภาค เรียงจากชั้นต่ำไปสูง (ใช้เลื่อนชั้น)' },
-  { key: 'PAYMENT_CHANNELS', type: 'list', defaultValue: 'เงินสด,โอนเงินเข้าบัญชีโรงเรียน', description: 'ช่องทางการรับเงิน คั่นด้วยจุลภาค' },
-  { key: 'APPROVAL_FEE_ADJUSTMENT', type: 'bool', defaultValue: 'TRUE', description: 'การลดหย่อน/ยกเว้น ต้องให้ผู้อำนวยการอนุมัติ' },
-  { key: 'APPROVAL_ASSESSMENT_CANCEL', type: 'bool', defaultValue: 'TRUE', description: 'การยกเลิกรายการเรียกเก็บ ต้องให้ผู้อำนวยการอนุมัติ' },
-  { key: 'APPROVAL_RECEIPT_CANCEL', type: 'bool', defaultValue: 'TRUE', description: 'การยกเลิกเลขที่ใบเสร็จ ต้องให้ผู้อำนวยการอนุมัติ' },
-  { key: 'APPROVAL_PAYMENT_CORRECTION', type: 'bool', defaultValue: 'TRUE', description: 'การแก้ไขรายการรับเงินที่บันทึกผิด ต้องให้ผู้อำนวยการอนุมัติ' },
-  { key: 'APPROVAL_BOOK_CLOSE', type: 'bool', defaultValue: 'TRUE', description: 'การปิดเล่มใบเสร็จก่อนใช้ครบเล่ม ต้องให้ผู้อำนวยการอนุมัติ' },
-  { key: 'RECEIPT_LOW_WARNING', type: 'int', defaultValue: '5', min: 0, max: 100, description: 'แจ้งเตือนเมื่อเลขที่ใบเสร็จในเล่มที่กำลังใช้เหลือน้อยกว่าหรือเท่ากับจำนวนนี้' },
-  { key: 'RECEIPT_STRICT_SEQUENCE', type: 'bool', defaultValue: 'TRUE', description: 'TRUE = ต้องใช้เลขที่ถัดไปเท่านั้น ถ้าจะข้ามเลขต้องยกเลิกเลขนั้นพร้อมเหตุผลก่อน (ค่าที่แนะนำ) / FALSE = ใช้เลขอื่นในเล่มได้แต่ต้องยืนยันคำเตือนเลขขาดช่วง' },
-  { key: 'SESSION_IDLE_MINUTES', type: 'int', defaultValue: '30', min: 5, max: 240, description: 'ไม่ใช้งานเกินกี่นาทีจึงต้องเข้าสู่ระบบใหม่' },
-  { key: 'SESSION_MAX_HOURS', type: 'int', defaultValue: '8', min: 1, max: 12, description: 'อายุสูงสุดของการเข้าสู่ระบบแต่ละครั้ง (ชั่วโมง)' },
-  { key: 'LOGIN_MAX_ATTEMPTS', type: 'int', defaultValue: '5', min: 3, max: 20, description: 'จำนวนครั้งที่ใส่รหัสผ่านผิดได้ก่อนถูกล็อกชั่วคราว' },
-  { key: 'LOGIN_LOCK_MINUTES', type: 'int', defaultValue: '15', min: 5, max: 1440, description: 'ระยะเวลาล็อกชั่วคราวเมื่อใส่รหัสผ่านผิดเกินกำหนด (นาที)' },
-  { key: 'BACKUP_RETENTION', type: 'int', defaultValue: '60', min: 7, max: 365, description: 'จำนวนไฟล์สำรองข้อมูลรายวันที่เก็บไว้ (ไม่นับไฟล์วันแรกของเดือนซึ่งเก็บถาวร)' },
+  { key: 'SCHOOL_NAME', group: 'school', label: 'ชื่อโรงเรียน', type: 'text', defaultValue: 'โรงเรียนวัดเสาหิน', description: 'ใช้ในหัวเอกสารและหน้าเข้าสู่ระบบ' },
+  { key: 'SCHOOL_ADDRESS', group: 'school', label: 'ที่อยู่โรงเรียน', type: 'text', defaultValue: '', description: 'ใช้ในหัวเอกสาร' },
+  { key: 'SCHOOL_PROVINCE', group: 'school', label: 'จังหวัด', type: 'text', defaultValue: 'เชียงใหม่', description: 'ใช้ในหัวเอกสาร' },
+  { key: 'SCHOOL_AFFILIATION', group: 'school', label: 'หน่วยงานต้นสังกัด', type: 'text', defaultValue: '', description: 'กรอกตามจริง เช่น ชื่อ สพป. ที่โรงเรียนสังกัด' },
+  { key: 'DIRECTOR_NAME', group: 'signers', label: 'ชื่อผู้อำนวยการ', type: 'text', defaultValue: '', description: 'ใช้ในช่องลงนามของรายงาน' },
+  { key: 'DIRECTOR_POSITION', group: 'signers', label: 'ตำแหน่งผู้อำนวยการ', type: 'text', defaultValue: 'ผู้อำนวยการโรงเรียนวัดเสาหิน', description: 'ใช้ในช่องลงนามของรายงาน' },
+  { key: 'FINANCE_OFFICER_NAME', group: 'signers', label: 'ชื่อเจ้าหน้าที่การเงิน', type: 'text', defaultValue: '', description: 'ใช้ในช่องลงนามของรายงาน' },
+  { key: 'FINANCE_OFFICER_POSITION', group: 'signers', label: 'ตำแหน่งเจ้าหน้าที่การเงิน', type: 'text', defaultValue: 'เจ้าหน้าที่การเงิน', description: 'ใช้ในช่องลงนามของรายงาน' },
+  { key: 'CURRENT_ACADEMIC_YEAR', group: 'academic', label: 'ปีการศึกษาปัจจุบัน', type: 'year', readOnly: true, defaultValue: null, description: 'เปลี่ยนได้ที่หน้า "ปีการศึกษา" (ค่าเริ่มต้นคำนวณจากวันที่ติดตั้ง)' },
+  { key: 'GRADE_LEVELS', group: 'academic', label: 'ระดับชั้นที่เปิดสอน', type: 'list', defaultValue: 'อ.1,อ.2,อ.3,ป.1,ป.2,ป.3,ป.4,ป.5,ป.6', description: 'คั่นด้วยจุลภาค เรียงจากชั้นต่ำไปสูง (ใช้เลื่อนชั้น)' },
+  { key: 'PAYMENT_CHANNELS', group: 'academic', label: 'ช่องทางการรับเงิน', type: 'list', defaultValue: 'เงินสด,โอนเงินเข้าบัญชีโรงเรียน', description: 'คั่นด้วยจุลภาค ทุกช่องทางต้องออกใบเสร็จจากเล่มจริง' },
+  { key: 'APPROVAL_FEE_ADJUSTMENT', group: 'approval', label: 'ลดหย่อน/ยกเว้น', type: 'bool', defaultValue: 'TRUE', description: 'การลดหย่อน/ยกเว้น ต้องให้ผู้อำนวยการอนุมัติ' },
+  { key: 'APPROVAL_ASSESSMENT_CANCEL', group: 'approval', label: 'ยกเลิกรายการเรียกเก็บ', type: 'bool', defaultValue: 'TRUE', description: 'การยกเลิกรายการเรียกเก็บ ต้องให้ผู้อำนวยการอนุมัติ' },
+  { key: 'APPROVAL_RECEIPT_CANCEL', group: 'approval', label: 'ยกเลิกเลขที่ใบเสร็จ', type: 'bool', defaultValue: 'TRUE', description: 'การยกเลิกเลขที่ใบเสร็จ ต้องให้ผู้อำนวยการอนุมัติ' },
+  { key: 'APPROVAL_PAYMENT_CORRECTION', group: 'approval', label: 'แก้ไขรายการรับเงินที่บันทึกผิด', type: 'bool', defaultValue: 'TRUE', description: 'การแก้ไขรายการรับเงินที่บันทึกผิด ต้องให้ผู้อำนวยการอนุมัติ' },
+  { key: 'APPROVAL_BOOK_CLOSE', group: 'approval', label: 'ปิดเล่มใบเสร็จก่อนใช้ครบ', type: 'bool', defaultValue: 'TRUE', description: 'การปิดเล่มใบเสร็จก่อนใช้ครบเล่ม ต้องให้ผู้อำนวยการอนุมัติ' },
+  { key: 'RECEIPT_LOW_WARNING', group: 'receipt', label: 'เตือนเมื่อเลขที่ในเล่มเหลือไม่เกิน', type: 'int', defaultValue: '5', min: 0, max: 100, description: 'แจ้งเตือนให้เตรียมเล่มใหม่เมื่อเลขที่ในเล่มที่กำลังใช้เหลือน้อยกว่าหรือเท่ากับจำนวนนี้' },
+  { key: 'RECEIPT_STRICT_SEQUENCE', group: 'receipt', label: 'ใช้เลขที่ใบเสร็จเรียงลำดับเคร่งครัด', type: 'bool', defaultValue: 'TRUE', description: 'TRUE = ต้องใช้เลขที่ถัดไปเท่านั้น ถ้าจะข้ามเลขต้องยกเลิกเลขนั้นพร้อมเหตุผลก่อน (ค่าที่แนะนำ) / FALSE = ใช้เลขอื่นในเล่มได้แต่ต้องยืนยันคำเตือนเลขขาดช่วง' },
+  { key: 'SESSION_IDLE_MINUTES', group: 'security', label: 'ออกจากระบบอัตโนมัติเมื่อไม่ใช้งาน (นาที)', type: 'int', defaultValue: '30', min: 5, max: 240, description: 'มีผลกับการเข้าสู่ระบบครั้งถัดไป' },
+  { key: 'SESSION_MAX_HOURS', group: 'security', label: 'อายุสูงสุดของการเข้าสู่ระบบ (ชั่วโมง)', type: 'int', defaultValue: '8', min: 1, max: 12, description: 'ครบเวลานี้ต้องเข้าสู่ระบบใหม่ แม้ยังใช้งานอยู่' },
+  { key: 'LOGIN_MAX_ATTEMPTS', group: 'security', label: 'ใส่รหัสผ่านผิดได้ไม่เกิน (ครั้ง)', type: 'int', defaultValue: '5', min: 3, max: 20, description: 'เกินจำนวนนี้ ชื่อผู้ใช้นั้นจะถูกล็อกชั่วคราว' },
+  { key: 'LOGIN_LOCK_MINUTES', group: 'security', label: 'ระยะเวลาล็อกชั่วคราว (นาที)', type: 'int', defaultValue: '15', min: 5, max: 360, description: 'ระยะเวลาที่ห้ามเข้าสู่ระบบหลังใส่รหัสผ่านผิดเกินกำหนด' },
+  { key: 'BACKUP_RETENTION', group: 'backup', label: 'จำนวนไฟล์สำรองรายวันที่เก็บไว้', type: 'int', defaultValue: '60', min: 7, max: 365, description: 'ไม่นับไฟล์วันแรกของเดือนซึ่งเก็บถาวร (ใช้ในระยะที่ 7)' },
 ]);

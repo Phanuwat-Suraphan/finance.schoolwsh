@@ -1,0 +1,533 @@
+<script>
+/* ==========================================================================
+   JsCore — แกนของหน้าเว็บ: เรียก API, สร้างหน้าจอ, หน้าต่าง, ฟอร์ม, ตาราง, เมนู
+   กฎสำคัญ: แสดงข้อมูลผ่าน textContent เสมอ (ฟังก์ชัน h) ไม่ใช้ innerHTML กับข้อมูล
+   หน้าเว็บนี้ไม่ใช่ที่ตรวจสิทธิ์ การซ่อนเมนูเป็นเพียงความสะดวก Server ตรวจสิทธิ์ทุกคำขอ
+   ========================================================================== */
+(function () {
+  'use strict';
+
+  var App = window.App = {};
+  App.state = { token: null, me: null, route: null, renderSeq: 0 };
+  App.ROLE_LABELS = { ADMIN: 'ผู้ดูแลระบบ', FINANCE: 'เจ้าหน้าที่การเงิน', DIRECTOR: 'ผู้อำนวยการ' };
+  App.routes = {};
+  App.routeOrder = [];
+  App.MENU_GROUPS = [];
+
+  // ---------------------------------------------------------------------------
+  // สร้าง element (ข้อความทุกชิ้นใส่ผ่าน textContent)
+  // ---------------------------------------------------------------------------
+  function append(el, child) {
+    if (child === null || child === undefined || child === false) return;
+    if (Array.isArray(child)) { child.forEach(function (c) { append(el, c); }); return; }
+    el.appendChild(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+
+  function h(tag, props) {
+    var el = document.createElement(tag);
+    if (props) {
+      Object.keys(props).forEach(function (key) {
+        var v = props[key];
+        if (v === null || v === undefined || v === false) return;
+        if (key === 'class') el.className = v;
+        else if (key === 'text') el.textContent = v;
+        else if (key === 'style') Object.assign(el.style, v);
+        else if (key === 'value') el.value = v;
+        else if (key === 'checked') el.checked = !!v;
+        else if (key === 'disabled') el.disabled = !!v;
+        else if (key.slice(0, 2) === 'on' && typeof v === 'function') el.addEventListener(key.slice(2).toLowerCase(), v);
+        else if (v === true) el.setAttribute(key, '');
+        else el.setAttribute(key, String(v));
+      });
+    }
+    for (var i = 2; i < arguments.length; i++) append(el, arguments[i]);
+    return el;
+  }
+
+  function clear(el) {
+    while (el.firstChild) el.removeChild(el.firstChild);
+    return el;
+  }
+
+  App.h = h;
+  App.append = append;
+  App.clear = clear;
+
+  var ICONS = {
+    school: 'M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6M12 5V2l3 1.5-3 1.5',
+    home: 'M3 11l9-8 9 8M5 10v10h5v-6h4v6h5V10',
+    users: 'M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75',
+    settings: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
+    calendar: 'M8 2v4M16 2v4M3 10h18M5 4h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z',
+    history: 'M3 3v5h5M3.05 13A9 9 0 1 0 6 5.3L3 8M12 7v5l4 2',
+    menu: 'M3 6h18M3 12h18M3 18h18',
+    x: 'M18 6L6 18M6 6l12 12',
+    logout: 'M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9',
+    key: 'M15 7a2 2 0 0 1 2 2M21 9a6 6 0 0 1-7.74 5.74L11 17H9v2H7v2H4a1 1 0 0 1-1-1v-2.59a1 1 0 0 1 .29-.7l6-6A6 6 0 1 1 21 9z',
+    plus: 'M12 5v14M5 12h14',
+    edit: 'M12 20h9M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z',
+    shield: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10zM9 12l2 2 4-4',
+    search: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM21 21l-4.35-4.35',
+    star: 'M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z',
+  };
+
+  App.icon = function (name) {
+    var ns = 'http://www.w3.org/2000/svg';
+    var svg = document.createElementNS(ns, 'svg');
+    svg.setAttribute('viewBox', '0 0 24 24');
+    svg.setAttribute('fill', 'none');
+    svg.setAttribute('stroke', 'currentColor');
+    svg.setAttribute('stroke-width', '2');
+    svg.setAttribute('stroke-linecap', 'round');
+    svg.setAttribute('stroke-linejoin', 'round');
+    svg.setAttribute('aria-hidden', 'true');
+    var path = document.createElementNS(ns, 'path');
+    path.setAttribute('d', ICONS[name] || '');
+    svg.appendChild(path);
+    return svg;
+  };
+
+  // ---------------------------------------------------------------------------
+  // จัดรูปแบบ
+  // ---------------------------------------------------------------------------
+  App.fmt = {
+    date: function (v) { return v ? formatThaiDate_(v, 'short') : '–'; },
+    dateLong: function (v) { return v ? formatThaiDate_(v) : '–'; },
+    datetime: function (v) { return v ? formatThaiDateTime_(v, 'short') : '–'; },
+    money: function (satang) { return formatSatang_(satang, true); },
+  };
+
+  App.badge = function (text, kind) {
+    return h('span', { class: 'badge' + (kind ? ' badge-' + kind : ''), text: text });
+  };
+
+  App.roleBadge = function (role) {
+    return App.badge(App.ROLE_LABELS[role] || role, role);
+  };
+
+  // ---------------------------------------------------------------------------
+  // เก็บ token เฉพาะในแท็บนี้ (ปิดแท็บแล้วหาย)
+  // ---------------------------------------------------------------------------
+  var TOKEN_KEY = 'wsh-fee-session';
+  App.session = {
+    get: function () {
+      if (App.state.token) return App.state.token;
+      try { App.state.token = window.sessionStorage.getItem(TOKEN_KEY); } catch (e) { App.state.token = null; }
+      return App.state.token;
+    },
+    set: function (token) {
+      App.state.token = token;
+      try { window.sessionStorage.setItem(TOKEN_KEY, token); } catch (e) { /* ใช้ในหน่วยความจำแทน */ }
+    },
+    clear: function () {
+      App.state.token = null;
+      App.state.me = null;
+      try { window.sessionStorage.removeItem(TOKEN_KEY); } catch (e) { /* ไม่มี storage */ }
+    },
+  };
+
+  // ---------------------------------------------------------------------------
+  // เรียก API (ทางเข้าเดียว: google.script.run.api)
+  // ---------------------------------------------------------------------------
+  var busy = 0;
+  function setBusy(delta) {
+    busy = Math.max(0, busy + delta);
+    document.body.classList.toggle('is-busy', busy > 0);
+  }
+
+  App.api = function (action, payload) {
+    setBusy(1);
+    return new Promise(function (resolve, reject) {
+      google.script.run
+        .withSuccessHandler(function (res) {
+          setBusy(-1);
+          if (res && res.ok) resolve(res.data);
+          else reject(res && res.error ? res.error : { code: 'INTERNAL', message: 'เกิดข้อผิดพลาดที่ไม่คาดคิด กรุณาลองใหม่' });
+        })
+        .withFailureHandler(function () {
+          setBusy(-1);
+          reject({ code: 'NETWORK', message: 'เชื่อมต่อระบบไม่สำเร็จ กรุณาตรวจสอบอินเทอร์เน็ตแล้วลองใหม่' });
+        })
+        .api({ action: action, token: App.session.get(), payload: payload || {} });
+    }).catch(function (err) {
+      if (App.state.me && err.code === 'UNAUTHENTICATED') {
+        err.handled = true;
+        App.session.clear();
+        App.showLogin(err.message);
+      } else if (App.state.me && err.reason === 'PASSWORD_CHANGE_REQUIRED') {
+        err.handled = true;
+        App.showForcedPasswordChange();
+      }
+      throw err;
+    });
+  };
+
+  /** แสดงข้อผิดพลาด (ข้ามถ้าระบบจัดการแล้ว เช่น หมดเวลาและพากลับหน้าเข้าสู่ระบบ) */
+  App.fail = function (err) {
+    if (err && err.handled) return;
+    App.toast((err && err.message) || 'เกิดข้อผิดพลาด กรุณาลองใหม่', 'error');
+  };
+
+  // ---------------------------------------------------------------------------
+  // แจ้งเตือน / หน้าต่าง / ยืนยัน
+  // ---------------------------------------------------------------------------
+  App.toast = function (message, type) {
+    var root = document.getElementById('toast-root');
+    var el = h('div', { class: 'toast' + (type ? ' toast-' + type : ''), text: message });
+    root.appendChild(el);
+    setTimeout(function () { if (el.parentNode) el.parentNode.removeChild(el); }, type === 'error' ? 6500 : 4000);
+  };
+
+  App.modal = function (opts) {
+    var root = document.getElementById('modal-root');
+    var previousFocus = document.activeElement;
+    var closeBtn = h('button', { type: 'button', class: 'icon-btn', 'aria-label': 'ปิด' }, App.icon('x'));
+    var body = h('div', { class: 'modal-body' });
+    append(body, opts.body);
+    var foot = h('div', { class: 'modal-foot' });
+    var dialog = h('div', { class: 'modal' + (opts.size === 'lg' ? ' modal-lg' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': opts.title },
+      h('div', { class: 'modal-head' }, h('h2', { text: opts.title }), closeBtn), body, foot);
+    var overlay = h('div', { class: 'modal-overlay' }, dialog);
+    var closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      document.removeEventListener('keydown', onKey);
+      if (previousFocus && previousFocus.focus) { try { previousFocus.focus(); } catch (e) { /* ไม่มีแล้ว */ } }
+      if (opts.onClose) opts.onClose();
+    }
+    function onKey(e) { if (e.key === 'Escape') close(); }
+    closeBtn.addEventListener('click', close);
+    overlay.addEventListener('mousedown', function (e) { if (e.target === overlay) close(); });
+    var buttons = (opts.actions || []).map(function (a) {
+      var btn = h('button', { type: 'button', class: 'btn' + (a.kind ? ' btn-' + a.kind : ''), text: a.label });
+      btn.addEventListener('click', function () { if (a.onClick) a.onClick(btn, close); else close(); });
+      foot.appendChild(btn);
+      return btn;
+    });
+    if (!buttons.length) foot.classList.add('hidden');
+    document.addEventListener('keydown', onKey);
+    root.appendChild(overlay);
+    var first = dialog.querySelector('input:not([disabled]), select:not([disabled]), textarea:not([disabled])');
+    if (first) first.focus(); else closeBtn.focus();
+    return { close: close, body: body, foot: foot, dialog: dialog, buttons: buttons };
+  };
+
+  App.confirm = function (message, opts) {
+    var o = opts || {};
+    return new Promise(function (resolve) {
+      var answered = false;
+      App.modal({
+        title: o.title || 'ยืนยันการทำรายการ',
+        body: h('p', { text: message }),
+        actions: [
+          { label: 'ยกเลิก', kind: 'secondary', onClick: function (b, close) { answered = true; close(); resolve(false); } },
+          { label: o.confirmLabel || 'ยืนยัน', kind: o.danger ? 'danger' : '', onClick: function (b, close) { answered = true; close(); resolve(true); } },
+        ],
+        onClose: function () { if (!answered) resolve(false); },
+      });
+    });
+  };
+
+  // ---------------------------------------------------------------------------
+  // ฟอร์ม
+  // ---------------------------------------------------------------------------
+  var fieldSeq = 0;
+
+  /** ช่องกรอกข้อมูล คืนค่า { wrap, input, get } */
+  App.field = function (o) {
+    var id = 'f' + (++fieldSeq);
+    var input;
+    if (o.type === 'checkbox') {
+      input = h('input', { id: id, type: 'checkbox', checked: !!o.value, disabled: o.disabled });
+      var wrapC = h('div', { class: 'field' + (o.span2 ? ' span-2' : '') },
+        h('label', { class: 'switch', for: id }, input, h('span', { text: o.label })),
+        o.help ? h('div', { class: 'help', text: o.help }) : null);
+      return { wrap: wrapC, input: input, get: function () { return input.checked; } };
+    }
+    if (o.type === 'select') {
+      input = h('select', { id: id, class: 'input', disabled: o.disabled });
+      (o.options || []).forEach(function (opt) { input.appendChild(h('option', { value: opt.value, text: opt.label })); });
+      if (o.value !== undefined && o.value !== null) input.value = String(o.value);
+    } else if (o.type === 'textarea') {
+      input = h('textarea', { id: id, class: 'input', rows: o.rows || 3, maxlength: o.maxlength, disabled: o.disabled });
+      input.value = o.value === undefined || o.value === null ? '' : String(o.value);
+    } else {
+      input = h('input', {
+        id: id, class: 'input', type: o.type || 'text', maxlength: o.maxlength, min: o.min, max: o.max,
+        placeholder: o.placeholder, autocomplete: o.autocomplete || 'off', inputmode: o.inputmode, disabled: o.disabled,
+        spellcheck: o.type === 'password' || o.mono ? 'false' : null, autocapitalize: o.autocapitalize,
+      });
+      if (o.value !== undefined && o.value !== null) input.value = String(o.value);
+    }
+    var label = h('label', { for: id }, o.label, o.required ? h('span', { class: 'req', text: ' *' }) : null);
+    var preview = null;
+    if (o.type === 'date') {
+      preview = h('div', { class: 'preview' });
+      var update = function () { preview.textContent = input.value ? '= ' + formatThaiDate_(input.value) : ''; };
+      input.addEventListener('input', update);
+      input.addEventListener('change', update);
+      update();
+    }
+    var wrap = h('div', { class: 'field' + (o.span2 ? ' span-2' : '') }, label, input, preview,
+      o.help ? h('div', { class: 'help', text: o.help }) : null);
+    return { wrap: wrap, input: input, get: function () { return input.value; } };
+  };
+
+  /** ช่องรหัสผ่าน พร้อมปุ่มแสดง/ซ่อน */
+  App.passwordField = function (o) {
+    var f = App.field(Object.assign({}, o, { type: 'password' }));
+    var toggle = h('button', { type: 'button', class: 'btn btn-secondary btn-sm', text: 'แสดง', 'aria-label': 'แสดงหรือซ่อนรหัสผ่าน' });
+    toggle.addEventListener('click', function () {
+      var show = f.input.type === 'password';
+      f.input.type = show ? 'text' : 'password';
+      toggle.textContent = show ? 'ซ่อน' : 'แสดง';
+    });
+    var group = h('div', { class: 'input-group' });
+    f.input.parentNode.replaceChild(group, f.input);
+    group.appendChild(f.input);
+    group.appendChild(toggle);
+    return f;
+  };
+
+  /**
+   * หน้าต่างฟอร์ม
+   * opts: { title, intro, fields: [{ key, label, type, ... }], submitLabel, onSubmit(values) → Promise, onDone(result) }
+   */
+  App.formModal = function (opts) {
+    var errorBox = h('div', { class: 'alert alert-error hidden', role: 'alert' });
+    var form = h('form', { class: 'form-grid', novalidate: true });
+    var built = opts.fields.map(function (f) {
+      var b = f.type === 'password' ? App.passwordField(f) : App.field(f);
+      b.key = f.key;
+      form.appendChild(b.wrap);
+      return b;
+    });
+    form.appendChild(h('button', { type: 'submit', class: 'hidden', tabindex: '-1', 'aria-hidden': 'true' }));
+    var intro = opts.intro ? (opts.intro instanceof Node ? opts.intro : h('div', { class: 'alert alert-info', text: opts.intro })) : null;
+    var submitting = false;
+    var modal;
+    function submit() {
+      if (submitting) return;
+      var values = {};
+      built.forEach(function (b) { values[b.key] = b.get(); });
+      var btn = modal.buttons[modal.buttons.length - 1];
+      var label = btn.textContent;
+      submitting = true;
+      btn.disabled = true;
+      btn.textContent = 'กำลังบันทึก…';
+      errorBox.classList.add('hidden');
+      Promise.resolve()
+        .then(function () { return opts.onSubmit(values); })
+        .then(function (result) {
+          modal.close();
+          if (opts.onDone) opts.onDone(result);
+        })
+        .catch(function (err) {
+          if (err && err.handled) { modal.close(); return; }
+          errorBox.textContent = (err && err.message) || 'บันทึกไม่สำเร็จ กรุณาลองใหม่';
+          errorBox.classList.remove('hidden');
+          errorBox.scrollIntoView({ block: 'nearest' });
+        })
+        .then(function () {
+          submitting = false;
+          btn.disabled = false;
+          btn.textContent = label;
+        });
+    }
+    form.addEventListener('submit', function (e) { e.preventDefault(); submit(); });
+    modal = App.modal({
+      title: opts.title,
+      size: opts.size,
+      body: [intro, errorBox, form],
+      actions: [
+        { label: 'ยกเลิก', kind: 'secondary' },
+        { label: opts.submitLabel || 'บันทึก', onClick: function () { submit(); } },
+      ],
+    });
+    return modal;
+  };
+
+  // ---------------------------------------------------------------------------
+  // ตาราง (บนมือถือแสดงเป็นการ์ด ใช้ data-label เป็นหัวข้อ)
+  // ---------------------------------------------------------------------------
+  App.table = function (opts) {
+    var wrap = h('div', { class: 'table-wrap' });
+    if (!opts.rows.length) {
+      wrap.appendChild(h('div', { class: 'empty', text: opts.empty || 'ไม่มีข้อมูล' }));
+      return wrap;
+    }
+    var thead = h('thead', null, h('tr', null, opts.columns.map(function (c) { return h('th', { class: c.className, text: c.label }); })));
+    var tbody = h('tbody');
+    opts.rows.forEach(function (row) {
+      var tr = h('tr', { class: opts.onRowClick ? 'clickable' : null });
+      if (opts.onRowClick) {
+        tr.tabIndex = 0;
+        tr.addEventListener('click', function (e) { if (!e.target.closest('button')) opts.onRowClick(row); });
+        tr.addEventListener('keydown', function (e) { if (e.key === 'Enter') opts.onRowClick(row); });
+      }
+      opts.columns.forEach(function (c) {
+        var content = c.render ? c.render(row) : row[c.key];
+        var td = h('td', { class: c.className, 'data-label': c.label });
+        append(td, content === null || content === undefined || content === '' ? '–' : content);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    wrap.appendChild(h('table', { class: 'data-table' }, thead, tbody));
+    return wrap;
+  };
+
+  // ---------------------------------------------------------------------------
+  // เมนูและการเปลี่ยนหน้า
+  // ---------------------------------------------------------------------------
+  App.defineRoute = function (name, def) {
+    App.routes[name] = def;
+    App.routeOrder.push(name);
+  };
+
+  App.canAccess = function (name) {
+    var route = App.routes[name];
+    return !!(route && App.state.me && route.roles.indexOf(App.state.me.user.role) !== -1);
+  };
+
+  function closeNav() {
+    var shell = document.getElementById('shell');
+    if (shell) shell.classList.remove('nav-open');
+  }
+
+  App.renderShell = function () {
+    var me = App.state.me;
+    var app = clear(document.getElementById('app'));
+    var nav = h('nav', { class: 'nav', 'aria-label': 'เมนูหลัก' });
+    App.MENU_GROUPS.forEach(function (group) {
+      var items = App.routeOrder.filter(function (name) {
+        var r = App.routes[name];
+        return r.menu && r.menu.group === group.key && App.canAccess(name);
+      });
+      if (!items.length) return;
+      nav.appendChild(h('div', { class: 'nav-group' },
+        h('div', { class: 'nav-group-label', text: group.label }),
+        items.map(function (name) {
+          var r = App.routes[name];
+          var btn = h('button', { type: 'button', class: 'nav-item', 'data-route': name }, App.icon(r.menu.icon), h('span', { text: r.menu.label }));
+          btn.addEventListener('click', function () { App.go(name); });
+          return btn;
+        })));
+    });
+
+    var userActions = h('div', { class: 'userbox-actions' });
+    if (me.authMode === 'PASSWORD') {
+      var pwBtn = h('button', { type: 'button', class: 'btn btn-sm' }, App.icon('key'), 'เปลี่ยนรหัสผ่าน');
+      pwBtn.addEventListener('click', function () { App.openChangePassword(); });
+      userActions.appendChild(pwBtn);
+    }
+    var outBtn = h('button', { type: 'button', class: 'btn btn-sm' }, App.icon('logout'), 'ออกจากระบบ');
+    outBtn.addEventListener('click', function () { App.logout(); });
+    userActions.appendChild(outBtn);
+
+    var sidebar = h('aside', { class: 'sidebar', id: 'sidebar' },
+      h('div', { class: 'brand' },
+        h('div', { class: 'brand-logo' }, App.icon('school')),
+        h('div', null, h('div', { class: 'brand-name', text: me.school.name }), h('div', { class: 'brand-sub', text: 'ระบบเงินบำรุงการศึกษา' }))),
+      nav,
+      h('div', { class: 'userbox' },
+        h('div', { class: 'userbox-name', text: me.user.displayName }),
+        h('div', { class: 'userbox-role', text: me.user.roleLabel + ' · ' + me.user.username }),
+        userActions));
+
+    var toggle = h('button', { type: 'button', class: 'icon-btn menu-toggle', 'aria-label': 'เปิดเมนู', 'aria-controls': 'sidebar' }, App.icon('menu'));
+    toggle.addEventListener('click', function () { document.getElementById('shell').classList.toggle('nav-open'); });
+    var topbar = h('header', { class: 'topbar' },
+      toggle,
+      h('div', { class: 'topbar-title', id: 'page-title' }),
+      h('span', { class: 'year-chip', title: 'ปีการศึกษาปัจจุบัน' }, App.icon('calendar'), h('span', { class: 'chip-label', text: 'ปีการศึกษา ' }), String(me.school.currentAcademicYear)));
+
+    var backdrop = h('div', { class: 'backdrop' });
+    backdrop.addEventListener('click', closeNav);
+    app.appendChild(h('div', { class: 'shell', id: 'shell' }, sidebar, backdrop,
+      h('div', { class: 'main' }, topbar, h('main', { class: 'content', id: 'content', tabindex: '-1' }))));
+  };
+
+  App.go = function (name, params) {
+    if (!App.routes[name]) name = 'home';
+    if (!document.getElementById('shell')) App.renderShell();
+    App.state.route = name;
+    var route = App.routes[name];
+    document.getElementById('page-title').textContent = route.title;
+    document.title = route.title + ' · ' + BOOT.appName;
+    Array.prototype.forEach.call(document.querySelectorAll('.nav-item'), function (el) {
+      el.classList.toggle('active', el.getAttribute('data-route') === name);
+    });
+    closeNav();
+    var content = clear(document.getElementById('content'));
+    if (!App.canAccess(name)) {
+      content.appendChild(h('div', { class: 'card card-body' }, h('h2', { text: 'ไม่มีสิทธิ์เข้าถึงหน้านี้' }),
+        h('p', { class: 'muted', text: 'หากต้องการใช้งาน กรุณาติดต่อผู้ดูแลระบบ' })));
+      return;
+    }
+    var seq = ++App.state.renderSeq;
+    content.appendChild(h('div', { class: 'empty', text: 'กำลังโหลดข้อมูล…' }));
+    Promise.resolve()
+      .then(function () { return route.render(params || {}); })
+      .then(function (node) {
+        if (seq !== App.state.renderSeq) return;
+        clear(content);
+        append(content, node);
+        window.scrollTo(0, 0);
+      })
+      .catch(function (err) {
+        if (seq !== App.state.renderSeq || (err && err.handled)) return;
+        clear(content).appendChild(h('div', { class: 'alert alert-error', role: 'alert', text: (err && err.message) || 'โหลดข้อมูลไม่สำเร็จ กรุณาลองใหม่' }));
+      });
+  };
+
+  App.refresh = function () { App.go(App.state.route); };
+
+  /** โหลดข้อมูลผู้ใช้ปัจจุบันแล้วเปิดหน้าหลัก (หรือหน้าบังคับเปลี่ยนรหัสผ่าน) */
+  App.loadMe = function (route) {
+    return App.api('auth.me').then(function (me) {
+      App.state.me = me;
+      if (me.mustChangePassword) {
+        App.showForcedPasswordChange();
+        return;
+      }
+      App.renderShell();
+      App.go(route || 'home');
+    });
+  };
+
+  /** โหลดข้อมูลผู้ใช้/โรงเรียนใหม่ (เช่น หลังเปลี่ยนชื่อโรงเรียนหรือปีการศึกษา) แล้วอยู่หน้าเดิม */
+  App.reloadMe = function () {
+    return App.api('auth.me').then(function (me) {
+      App.state.me = me;
+      App.renderShell();
+      App.go(App.state.route || 'home');
+    });
+  };
+
+  App.logout = function () {
+    App.api('auth.logout').catch(function () { /* ออกจากระบบฝั่งหน้าเว็บต่อไป */ }).then(function () {
+      App.session.clear();
+      App.showLogin('ออกจากระบบเรียบร้อยแล้ว', 'info');
+    });
+  };
+
+  App.start = function () {
+    if (!window.google || !google.script || !google.script.run) {
+      clear(document.getElementById('app')).appendChild(h('div', { class: 'boot-screen' },
+        h('p', { text: 'กรุณาเปิดระบบผ่านลิงก์เว็บแอปของโรงเรียน' })));
+      return;
+    }
+    if (App.session.get()) {
+      App.loadMe().catch(function () {
+        App.session.clear();
+        App.showLogin();
+      });
+    } else {
+      App.showLogin();
+    }
+  };
+})();
+</script>

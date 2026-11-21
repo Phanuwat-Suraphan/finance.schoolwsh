@@ -6,6 +6,9 @@
  *   - ใน Apps Script Editor เลือกฟังก์ชัน SetupDatabase แล้วกด "เรียกใช้ (Run)"
  *   - หรือเปิด Google Sheets → เมนู "ระบบเงินบำรุงการศึกษา" → "1) ติดตั้ง / ตรวจสอบโครงสร้างฐานข้อมูล"
  *
+ *  สร้างผู้ดูแลระบบคนแรก (หรือรีเซ็ตเมื่อลืมรหัสผ่าน): เมนู "3) สร้างหรือรีเซ็ตบัญชีผู้ดูแลระบบ"
+ *   ใช้ได้เฉพาะเจ้าของระบบ ไม่มีหน้า "สมัครสมาชิก" บนเว็บ
+ *
  *  SetupDatabase() รันซ้ำได้อย่างปลอดภัย
  *   - สร้างเฉพาะชีต คอลัมน์ และค่าตั้งค่าที่ยังไม่มี
  *   - ไม่ลบ ไม่ย้าย ไม่เขียนทับข้อมูลเดิม และไม่เปลี่ยนค่าลับที่สร้างไว้แล้ว
@@ -37,6 +40,7 @@ function onOpen() {
     .createMenu(MENU_TITLE)
     .addItem('1) ติดตั้ง / ตรวจสอบโครงสร้างฐานข้อมูล', 'menuSetupDatabase')
     .addItem('2) ตรวจสอบความถูกต้องของประวัติการใช้งาน', 'menuVerifyAuditLog')
+    .addItem('3) สร้างหรือรีเซ็ตบัญชีผู้ดูแลระบบ', 'menuSetupAdmin')
     .addToUi();
 }
 
@@ -67,6 +71,67 @@ function menuVerifyAuditLog() {
   } catch (e) {
     ui.alert('ตรวจสอบไม่สำเร็จ', ownerErrorMessage_(e), ui.ButtonSet.OK);
   }
+}
+
+/** เมนู 3: เปิดหน้าต่างสร้างหรือรีเซ็ตบัญชีผู้ดูแลระบบ */
+function menuSetupAdmin() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    assertOwnerContext_();
+    const html = injectHtml_(htmlSource_('AdminDialog'), '/*@@BOOT@@*/',
+      'var DIALOG = ' + safeJsonForScript_({ authMode: authMode_() }) + ';');
+    ui.showModalDialog(HtmlService.createHtmlOutput(html).setWidth(440).setHeight(600), 'สร้างหรือรีเซ็ตบัญชีผู้ดูแลระบบ');
+  } catch (e) {
+    ui.alert('เปิดหน้าต่างไม่สำเร็จ', ownerErrorMessage_(e), ui.ButtonSet.OK);
+  }
+}
+
+/**
+ * รับข้อมูลจากหน้าต่างในเมนู 3 (เจ้าของระบบเท่านั้น)
+ * ชื่อผู้ใช้ใหม่ = สร้างผู้ดูแลระบบ / ชื่อผู้ใช้ผู้ดูแลระบบเดิม = รีเซ็ตรหัสผ่านและเปิดใช้งาน
+ */
+function ownerSetupAdmin(form) {
+  try {
+    assertOwnerContext_();
+    const message = withScriptLock_(function () { return ownerSetupAdmin_(form || {}); });
+    return { ok: true, message: message };
+  } catch (e) {
+    return { ok: false, message: ownerErrorMessage_(e) };
+  }
+}
+
+function ownerSetupAdmin_(form) {
+  const mode = authMode_();
+  const username = normalizeUsername_(form.username);
+  const fields = {
+    DisplayName: requireText_(form.displayName, 'ชื่อ-นามสกุล', { max: 100 }),
+    Email: normalizeEmail_(form.email, mode === AUTH_MODES.GOOGLE),
+    Status: STATUS.USER.ACTIVE,
+  };
+  if (mode === AUTH_MODES.PASSWORD) {
+    const password = validateNewPassword_(typeof form.password === 'string' ? form.password : '', username);
+    if (form.password !== form.confirmPassword) throw validationError_('รหัสผ่านทั้งสองช่องไม่ตรงกัน');
+    fields.PasswordHash = hashPassword_(password);
+    fields.MustChangePassword = form.mustChangePassword !== false;
+  }
+  const existing = dbFindOne_(SHEETS.USERS, function (u) { return u.Username === username; });
+  if (existing) {
+    if (existing.Role !== ROLES.ADMIN) {
+      throw appError_(ERROR_CODES.CONFLICT, 'ชื่อผู้ใช้ "' + username + '" เป็นบัญชีของ' + (ROLE_LABELS[existing.Role] || existing.Role) + ' กรุณาใช้ชื่อผู้ใช้อื่น');
+    }
+    fields.SessionVersion = (existing.SessionVersion || 0) + 1;
+    dbUpdate_(SHEETS.USERS, existing.UserId, fields, ACTORS.OWNER, {
+      action: AUDIT_ACTIONS.PASSWORD_CHANGE, note: 'เจ้าของระบบรีเซ็ตบัญชีผู้ดูแลระบบ',
+    });
+    clearLoginFailures_(username);
+    return 'รีเซ็ตบัญชีผู้ดูแลระบบ "' + username + '" เรียบร้อยแล้ว';
+  }
+  fields.Username = username;
+  fields.Role = ROLES.ADMIN;
+  fields.SessionVersion = 1;
+  if (fields.MustChangePassword === undefined) fields.MustChangePassword = false;
+  dbInsert_(SHEETS.USERS, fields, ACTORS.OWNER, { note: 'เจ้าของระบบสร้างบัญชีผู้ดูแลระบบ' });
+  return 'สร้างบัญชีผู้ดูแลระบบ "' + username + '" เรียบร้อยแล้ว';
 }
 
 /**
@@ -115,6 +180,7 @@ function setupDatabase_(ss) {
     warnings: [],
     sheets: [],
     settingsAdded: [],
+    academicYearCreated: null,
     changed: false,
   };
 
@@ -124,9 +190,12 @@ function setupDatabase_(ss) {
   });
   dbClearCache_();
   ensureDefaultSettings_(report);
+  ensureDefaultAcademicYear_(report);
+  ensurePasswordHashIterations_(report);
 
   report.changed = report.propertiesInitialized.length > 0 ||
     report.settingsAdded.length > 0 ||
+    report.academicYearCreated !== null ||
     report.sheets.some(function (s) { return s.action !== 'ok'; });
 
   auditAppend_([{
@@ -246,12 +315,33 @@ function ensureDefaultSettings_(report) {
   const toAdd = SETTINGS_DEFS
     .filter(function (def) { return !existing[def.key]; })
     .map(function (def) {
-      return { SettingKey: def.key, Value: defaultSettingValue_(def), Description: def.description };
+      return { SettingKey: def.key, Value: defaultSettingValue_(def), Description: settingDescription_(def) };
     });
   if (toAdd.length) {
     dbInsertMany_(SHEETS.SCHOOL_SETTINGS, toAdd, ACTORS.OWNER, { note: 'ค่าเริ่มต้นจากการติดตั้งฐานข้อมูล' });
     report.settingsAdded = toAdd.map(function (r) { return r.SettingKey; });
   }
+}
+
+/** สร้างปีการศึกษาปัจจุบันให้ ถ้ายังไม่มีปีการศึกษาใดเลย */
+function ensureDefaultAcademicYear_(report) {
+  if (dbAll_(SHEETS.ACADEMIC_YEARS).length) return;
+  const year = getSetting_('CURRENT_ACADEMIC_YEAR');
+  dbInsert_(SHEETS.ACADEMIC_YEARS, {
+    Year: year,
+    Label: 'ปีการศึกษา ' + year,
+    IsCurrent: true,
+    Status: STATUS.ACADEMIC_YEAR.OPEN,
+  }, ACTORS.OWNER, { note: 'ปีการศึกษาเริ่มต้นจากการติดตั้งฐานข้อมูล' });
+  report.academicYearCreated = year;
+}
+
+/** วัดความเร็วเครื่องแล้วกำหนดจำนวนรอบแฮชรหัสผ่าน (ครั้งเดียว ไม่เปลี่ยนค่าเดิม) */
+function ensurePasswordHashIterations_(report) {
+  const props = PropertiesService.getScriptProperties();
+  if (props.getProperty(PROP_KEYS.PASSWORD_HASH_ITERATIONS)) return;
+  props.setProperty(PROP_KEYS.PASSWORD_HASH_ITERATIONS, String(calibrateHashIterations_()));
+  report.propertiesInitialized.push(PROP_KEYS.PASSWORD_HASH_ITERATIONS);
 }
 
 function defaultSettingValue_(def) {
@@ -267,6 +357,7 @@ function summarizeSetupReport_(report) {
     headersWritten: [],
     columnsAdded: {},
     settingsAdded: report.settingsAdded.slice(),
+    academicYearCreated: report.academicYearCreated,
     propertiesInitialized: report.propertiesInitialized.slice(),
     warnings: report.warnings.slice(),
   };
@@ -293,6 +384,7 @@ function formatSetupReport_(report) {
   if (headers.length) lines.push('เขียนหัวตารางในชีตเดิม: ' + headers.map(function (s) { return s.name; }).join(', '));
   added.forEach(function (s) { lines.push('เพิ่มคอลัมน์ในชีต ' + s.name + ': ' + s.addedColumns.join(', ')); });
   if (report.settingsAdded.length) lines.push('เพิ่มค่าตั้งค่าเริ่มต้น ' + report.settingsAdded.length + ' รายการ');
+  if (report.academicYearCreated !== null) lines.push('สร้างปีการศึกษาเริ่มต้น ' + report.academicYearCreated);
   if (report.propertiesInitialized.length) {
     lines.push('สร้างค่าระบบใน Script Properties (ไม่แสดงค่า): ' + report.propertiesInitialized.join(', '));
   }

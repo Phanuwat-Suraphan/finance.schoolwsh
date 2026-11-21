@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: 'Sarabun', 'Tahoma', 'Leelawadee UI', sans-serif; color: #1B2B3F; font-size: 14px; }
+    .intro { background: #EAF3FC; border-left: 4px solid #1F3A5F; padding: 10px 12px; border-radius: 6px; margin-bottom: 14px; line-height: 1.5; }
+    label { display: block; font-weight: 600; margin: 10px 0 4px; }
+    .hint { color: #5B6B80; font-weight: 400; font-size: 12px; }
+    input[type=text], input[type=email], input[type=password] { width: 100%; padding: 8px 10px; border: 1px solid #C9D3DF; border-radius: 6px; font: inherit; }
+    input:focus { outline: 2px solid #2E86DE; border-color: #2E86DE; }
+    .check { display: flex; gap: 8px; align-items: flex-start; margin-top: 12px; font-weight: 400; }
+    .check input { margin-top: 3px; }
+    .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 18px; }
+    button { font: inherit; padding: 8px 16px; border-radius: 6px; border: 1px solid #1F3A5F; cursor: pointer; }
+    .primary { background: #1F3A5F; color: #fff; }
+    .secondary { background: #fff; color: #1F3A5F; }
+    button:disabled { opacity: .6; cursor: wait; }
+    .msg { margin-top: 12px; padding: 10px 12px; border-radius: 6px; display: none; line-height: 1.5; }
+    .msg.error { display: block; background: #FBEAE8; color: #8E2A1F; }
+    .msg.ok { display: block; background: #E6F5EE; color: #155F3D; }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="intro">
+    ใช้สร้าง<strong>ผู้ดูแลระบบคนแรก</strong> หรือรีเซ็ตรหัสผ่านเมื่อผู้ดูแลระบบลืมรหัสผ่าน
+    (ใส่ชื่อผู้ใช้ของผู้ดูแลระบบเดิม) ผู้ดูแลระบบจะเพิ่มผู้ใช้คนอื่นได้ในเว็บแอป
+  </div>
+  <form id="form" autocomplete="off">
+    <label for="username">ชื่อผู้ใช้ <span class="hint">(ภาษาอังกฤษตัวพิมพ์เล็ก เช่น admin)</span></label>
+    <input id="username" type="text" maxlength="32" required>
+
+    <label for="displayName">ชื่อ-นามสกุล</label>
+    <input id="displayName" type="text" maxlength="100" required>
+
+    <label for="email">อีเมล <span class="hint" id="emailHint">(ไม่บังคับ)</span></label>
+    <input id="email" type="email" maxlength="254">
+
+    <div id="passwordFields">
+      <label for="password">รหัสผ่าน <span class="hint">(อย่างน้อย 8 ตัว มีทั้งตัวอักษรและตัวเลข)</span></label>
+      <input id="password" type="password" maxlength="128" autocomplete="new-password">
+      <label for="confirmPassword">ยืนยันรหัสผ่าน</label>
+      <input id="confirmPassword" type="password" maxlength="128" autocomplete="new-password">
+      <label class="check"><input id="mustChange" type="checkbox" checked>
+        <span>ให้เปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งแรก (แนะนำ เมื่อสร้างให้ผู้อื่น)</span></label>
+    </div>
+
+    <div id="msg" class="msg" role="status"></div>
+    <div class="actions">
+      <button type="button" class="secondary" id="closeBtn">ปิด</button>
+      <button type="submit" class="primary" id="saveBtn">บันทึก</button>
+    </div>
+  </form>
+  <script>
+  /*@@BOOT@@*/
+  (function () {
+    var form = document.getElementById('form');
+    var msg = document.getElementById('msg');
+    var saveBtn = document.getElementById('saveBtn');
+    var googleMode = DIALOG.authMode === 'GOOGLE';
+    if (googleMode) {
+      document.getElementById('passwordFields').className = 'hidden';
+      document.getElementById('emailHint').textContent = '(บังคับ: บัญชี Google ของโรงเรียนที่ใช้เข้าสู่ระบบ)';
+      document.getElementById('email').required = true;
+    }
+    function show(text, ok) { msg.textContent = text; msg.className = 'msg ' + (ok ? 'ok' : 'error'); }
+    document.getElementById('closeBtn').addEventListener('click', function () { google.script.host.close(); });
+    form.addEventListener('submit', function (event) {
+      event.preventDefault();
+      saveBtn.disabled = true;
+      show('กำลังบันทึก…', true);
+      google.script.run
+        .withSuccessHandler(function (res) {
+          saveBtn.disabled = false;
+          show(res.message, res.ok);
+          if (res.ok) {
+            document.getElementById('password').value = '';
+            document.getElementById('confirmPassword').value = '';
+          }
+        })
+        .withFailureHandler(function () {
+          saveBtn.disabled = false;
+          show('เชื่อมต่อไม่สำเร็จ กรุณาลองใหม่', false);
+        })
+        .ownerSetupAdmin({
+          username: document.getElementById('username').value,
+          displayName: document.getElementById('displayName').value,
+          email: document.getElementById('email').value,
+          password: googleMode ? '' : document.getElementById('password').value,
+          confirmPassword: googleMode ? '' : document.getElementById('confirmPassword').value,
+          mustChangePassword: document.getElementById('mustChange').checked,
+        });
+    });
+  })();
+  </script>
+</body>
+</html>

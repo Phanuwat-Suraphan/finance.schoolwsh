@@ -185,3 +185,98 @@ function auditVerifyChain_() {
     lastHash: prev,
   };
 }
+
+// ---------------------------------------------------------------------------
+// API: ดูประวัติการใช้งาน (ผู้ดูแลระบบและผู้อำนวยการ ตรวจสิทธิ์ใน Api.gs)
+// ---------------------------------------------------------------------------
+
+const AUDIT_PAGE_SIZE = 50;
+
+function auditEntityLabel_(entity) {
+  if (entity && Object.prototype.hasOwnProperty.call(SCHEMA, entity)) return getSchema_(entity).label;
+  const labels = { Database: 'ฐานข้อมูล', Api: 'คำสั่งของระบบ', Auth: 'การเข้าสู่ระบบ' };
+  return labels[entity] || entity || '';
+}
+
+function auditParseJson_(text) {
+  if (!text) return null;
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    return { ข้อมูล: text };
+  }
+}
+
+function auditItemDto_(r) {
+  return {
+    logId: r.LogId,
+    timestamp: r.Timestamp,
+    username: r.Username,
+    role: r.Role,
+    roleLabel: ROLE_LABELS[r.Role] || ACTOR_ROLE_LABELS[r.Role] || r.Role,
+    action: r.Action,
+    actionLabel: AUDIT_ACTION_LABELS[r.Action] || r.Action,
+    entity: r.Entity,
+    entityLabel: auditEntityLabel_(r.Entity),
+    entityId: r.EntityId,
+    note: r.Note,
+    before: auditParseJson_(r.BeforeJson),
+    after: auditParseJson_(r.AfterJson),
+  };
+}
+
+/**
+ * audit.list — ค้นหาประวัติ ล่าสุดก่อน
+ * payload: { action, username, dateFrom, dateTo, q, page }
+ */
+function auditList_(ctx, payload) {
+  const action = requireEnum_(payload.action, AUDIT_ACTIONS, 'การกระทำ', { optional: true });
+  const username = requireText_(payload.username, 'ชื่อผู้ใช้', { optional: true, max: 64 }).toLowerCase();
+  const dateFrom = requireIsoDate_(payload.dateFrom, 'วันที่เริ่มต้น', { optional: true });
+  const dateTo = requireIsoDate_(payload.dateTo, 'วันที่สิ้นสุด', { optional: true });
+  const q = requireText_(payload.q, 'คำค้น', { optional: true, max: 100 }).toLowerCase();
+  const page = requireInt_(payload.page, 'หน้า', { optional: true, min: 1, max: 100000 }) || 1;
+
+  const rows = dbAll_(SHEETS.AUDIT_LOGS).filter(function (r) {
+    if (action && r.Action !== action) return false;
+    if (username && String(r.Username).toLowerCase().indexOf(username) === -1) return false;
+    const day = String(r.Timestamp).slice(0, 10);
+    if (dateFrom && day < dateFrom) return false;
+    if (dateTo && day > dateTo) return false;
+    if (q && (String(r.EntityId) + ' ' + String(r.Note) + ' ' + String(r.Entity)).toLowerCase().indexOf(q) === -1) return false;
+    return true;
+  });
+  rows.reverse();
+  const total = rows.length;
+  const pages = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));
+  const current = Math.min(page, pages);
+  const items = rows.slice((current - 1) * AUDIT_PAGE_SIZE, current * AUDIT_PAGE_SIZE).map(auditItemDto_);
+  return {
+    total: total,
+    page: current,
+    pages: pages,
+    pageSize: AUDIT_PAGE_SIZE,
+    items: items,
+    actions: Object.keys(AUDIT_ACTIONS).map(function (k) { return { value: k, label: AUDIT_ACTION_LABELS[k] || k }; }),
+  };
+}
+
+/** audit.verify — ตรวจลูกโซ่ hash และบันทึกผลการตรวจไว้ในประวัติด้วย */
+function auditVerify_(ctx) {
+  const result = auditVerifyChain_();
+  auditAppend_([{
+    action: AUDIT_ACTIONS.INTEGRITY_CHECK,
+    entity: SHEETS.AUDIT_LOGS,
+    entityId: '',
+    note: result.ok
+      ? 'ตรวจประวัติการใช้งาน ' + result.total + ' รายการ: ถูกต้อง'
+      : 'ตรวจประวัติการใช้งาน ' + result.total + ' รายการ: พบปัญหา ' + result.problemCount + ' จุด',
+  }], actorFromCtx_(ctx));
+  return {
+    ok: result.ok,
+    total: result.total,
+    problemCount: result.problemCount,
+    problems: result.problems.slice(0, 50),
+    lastHash: result.lastHash,
+  };
+}

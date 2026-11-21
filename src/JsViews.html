@@ -1,0 +1,659 @@
+<script>
+/* ==========================================================================
+   JsViews — หน้าจอของระบบ (ระยะที่ 2)
+   เข้าสู่ระบบ / เปลี่ยนรหัสผ่าน / หน้าหลัก / ผู้ใช้งาน / ตั้งค่าโรงเรียน / ปีการศึกษา / ประวัติการใช้งาน
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var icon = App.icon;
+  var ALL = ['ADMIN', 'FINANCE', 'DIRECTOR'];
+
+  App.MENU_GROUPS = [
+    { key: 'main', label: 'ทั่วไป' },
+    { key: 'manage', label: 'การจัดการระบบ' },
+    { key: 'info', label: 'ข้อมูลโรงเรียน' },
+  ];
+
+  var PASSWORD_RULES = [
+    'อย่างน้อย 8 ตัวอักษร',
+    'มีทั้งตัวอักษรและตัวเลข',
+    'ไม่มีชื่อผู้ใช้อยู่ในรหัสผ่าน',
+  ];
+
+  function rulesList(extra) {
+    return h('ul', { class: 'rules' }, PASSWORD_RULES.concat(extra || []).map(function (r) { return h('li', { text: r }); }));
+  }
+
+  function pageHead(title, description, actions) {
+    return h('div', { class: 'page-head' },
+      h('div', null, h('h1', { text: title }), description ? h('p', { text: description }) : null),
+      actions ? h('div', { class: 'toolbar', style: { marginBottom: '0' } }, actions) : null);
+  }
+
+  function button(label, kind, onClick, iconName) {
+    var btn = h('button', { type: 'button', class: 'btn' + (kind ? ' btn-' + kind : '') }, iconName ? icon(iconName) : null, label);
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  // ---------------------------------------------------------------------------
+  // หน้าเข้าสู่ระบบ
+  // ---------------------------------------------------------------------------
+  function authPage(title, subtitle, bodyNodes) {
+    var app = clear(document.getElementById('app'));
+    app.appendChild(h('div', { class: 'login-page' },
+      h('div', { class: 'login-card' },
+        h('div', { class: 'login-head' },
+          h('div', { class: 'login-logo' }, icon('school')),
+          h('div', { class: 'login-school', text: title }),
+          h('div', { class: 'login-app', text: subtitle })),
+        h('div', { class: 'login-body' }, bodyNodes),
+        h('div', { class: 'login-foot', text: 'จังหวัด' + BOOT.province + ' · เวอร์ชัน ' + BOOT.version }))));
+  }
+
+  App.showLogin = function (message, kind) {
+    App.state.me = null;
+    var notice = h('div', { class: 'alert ' + (kind === 'info' ? 'alert-info' : 'alert-error') + (message ? '' : ' hidden'), role: 'alert', text: message || '' });
+    function showError(text) {
+      notice.className = 'alert alert-error';
+      notice.textContent = text;
+    }
+    function onLoggedIn(result) {
+      App.session.set(result.token);
+      return App.loadMe();
+    }
+
+    if (BOOT.authMode === 'GOOGLE') {
+      var googleBtn = h('button', { type: 'button', class: 'btn btn-block', text: 'เข้าสู่ระบบด้วยบัญชี Google ของโรงเรียน' });
+      googleBtn.addEventListener('click', function () {
+        googleBtn.disabled = true;
+        App.api('auth.loginGoogle').then(onLoggedIn).catch(function (err) {
+          googleBtn.disabled = false;
+          showError(err.message);
+        });
+      });
+      authPage(BOOT.schoolName, BOOT.appName, [notice,
+        h('p', { class: 'muted small', text: 'ระบบจะใช้บัญชี Google ที่เข้าสู่ระบบอยู่ในเบราว์เซอร์นี้' }), googleBtn]);
+      return;
+    }
+
+    var username = App.field({ label: 'ชื่อผู้ใช้', autocomplete: 'username', autocapitalize: 'none', mono: true });
+    var password = App.passwordField({ label: 'รหัสผ่าน', autocomplete: 'current-password' });
+    var submit = h('button', { type: 'submit', class: 'btn btn-block', text: 'เข้าสู่ระบบ' });
+    var form = h('form', { class: 'stack', novalidate: true }, notice, username.wrap, password.wrap, submit);
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (submit.disabled) return;
+      submit.disabled = true;
+      submit.textContent = 'กำลังตรวจสอบ…';
+      notice.classList.add('hidden');
+      App.api('auth.login', { username: username.input.value, password: password.input.value })
+        .then(onLoggedIn)
+        .catch(function (err) {
+          password.input.value = '';
+          showError(err.message);
+          password.input.focus();
+        })
+        .then(function () {
+          submit.disabled = false;
+          submit.textContent = 'เข้าสู่ระบบ';
+        });
+    });
+    authPage(BOOT.schoolName, BOOT.appName, [form,
+      h('p', { class: 'muted small', text: 'ลืมรหัสผ่าน กรุณาติดต่อผู้ดูแลระบบของโรงเรียน' })]);
+    username.input.focus();
+  };
+
+  // ---------------------------------------------------------------------------
+  // เปลี่ยนรหัสผ่าน (บังคับเมื่อใช้รหัสผ่านชั่วคราว / เลือกเองจากเมนู)
+  // ---------------------------------------------------------------------------
+  function changePasswordRequest(values) {
+    if (values.newPassword !== values.confirmPassword) {
+      return Promise.reject({ message: 'รหัสผ่านใหม่ทั้งสองช่องไม่ตรงกัน' });
+    }
+    return App.api('auth.changePassword', { currentPassword: values.currentPassword, newPassword: values.newPassword })
+      .then(function (result) {
+        App.session.set(result.token);
+        return result;
+      });
+  }
+
+  App.showForcedPasswordChange = function () {
+    var me = App.state.me;
+    var notice = h('div', { class: 'alert alert-error hidden', role: 'alert' });
+    var current = App.passwordField({ label: 'รหัสผ่านปัจจุบัน (รหัสผ่านชั่วคราว)', autocomplete: 'current-password' });
+    var next = App.passwordField({ label: 'รหัสผ่านใหม่', autocomplete: 'new-password' });
+    var confirm = App.passwordField({ label: 'ยืนยันรหัสผ่านใหม่', autocomplete: 'new-password' });
+    var submit = h('button', { type: 'submit', class: 'btn btn-block', text: 'บันทึกรหัสผ่านใหม่' });
+    var logout = h('button', { type: 'button', class: 'btn btn-ghost btn-block', text: 'ออกจากระบบ' });
+    logout.addEventListener('click', function () { App.logout(); });
+    var form = h('form', { class: 'stack', novalidate: true },
+      h('div', { class: 'alert alert-info' },
+        h('strong', { text: 'กรุณาตั้งรหัสผ่านใหม่ก่อนใช้งาน' }),
+        h('div', { text: 'บัญชีนี้ใช้รหัสผ่านชั่วคราวที่ผู้ดูแลระบบกำหนด รหัสผ่านใหม่ต้อง:' }),
+        rulesList(['ไม่ซ้ำกับรหัสผ่านเดิม'])),
+      notice, current.wrap, next.wrap, confirm.wrap, submit, logout);
+    form.addEventListener('submit', function (e) {
+      e.preventDefault();
+      if (submit.disabled) return;
+      submit.disabled = true;
+      notice.classList.add('hidden');
+      changePasswordRequest({ currentPassword: current.input.value, newPassword: next.input.value, confirmPassword: confirm.input.value })
+        .then(function () {
+          App.toast('เปลี่ยนรหัสผ่านเรียบร้อยแล้ว', 'success');
+          return App.loadMe();
+        })
+        .catch(function (err) {
+          if (err && err.handled) return;
+          notice.textContent = err.message;
+          notice.classList.remove('hidden');
+        })
+        .then(function () { submit.disabled = false; });
+    });
+    authPage('ตั้งรหัสผ่านใหม่', (me ? me.user.displayName + ' · ' : '') + BOOT.schoolName, form);
+    current.input.focus();
+  };
+
+  App.openChangePassword = function () {
+    App.formModal({
+      title: 'เปลี่ยนรหัสผ่าน',
+      intro: h('div', { class: 'alert alert-info' }, h('div', { text: 'รหัสผ่านใหม่ต้อง:' }), rulesList(['ไม่ซ้ำกับรหัสผ่านเดิม']),
+        h('div', { class: 'small', text: 'หลังเปลี่ยน การเข้าสู่ระบบบนเครื่องอื่นของคุณจะหมดอายุทันที' })),
+      fields: [
+        { key: 'currentPassword', label: 'รหัสผ่านปัจจุบัน', type: 'password', autocomplete: 'current-password', span2: true },
+        { key: 'newPassword', label: 'รหัสผ่านใหม่', type: 'password', autocomplete: 'new-password' },
+        { key: 'confirmPassword', label: 'ยืนยันรหัสผ่านใหม่', type: 'password', autocomplete: 'new-password' },
+      ],
+      submitLabel: 'เปลี่ยนรหัสผ่าน',
+      onSubmit: changePasswordRequest,
+      onDone: function () { App.toast('เปลี่ยนรหัสผ่านเรียบร้อยแล้ว', 'success'); },
+    });
+  };
+
+  // ---------------------------------------------------------------------------
+  // หน้าหลัก
+  // ---------------------------------------------------------------------------
+  function stat(label, value) {
+    return h('div', { class: 'card stat' }, h('div', { class: 'stat-label', text: label }), h('div', { class: 'stat-value', text: value }));
+  }
+
+  function stepList(steps) {
+    return h('ol', { class: 'steps' }, steps.map(function (s, i) {
+      return h('li', null, h('span', { class: 'step-no', text: String(i + 1) }),
+        h('div', { style: { flex: '1' } }, h('div', { text: s.text }), s.help ? h('div', { class: 'muted small', text: s.help }) : null),
+        s.route ? button(s.button || 'ไปที่หน้านี้', 'secondary btn-sm', function () { App.go(s.route); }) : null);
+    }));
+  }
+
+  App.defineRoute('home', {
+    title: 'หน้าหลัก',
+    roles: ALL,
+    menu: { group: 'main', label: 'หน้าหลัก', icon: 'home' },
+    render: function () {
+      var me = App.state.me;
+      var role = me.user.role;
+      var card;
+      if (role === 'ADMIN') {
+        card = h('div', { class: 'card' },
+          h('div', { class: 'card-head' }, h('h2', { text: 'เริ่มต้นใช้งาน (ผู้ดูแลระบบ)' })),
+          h('div', { class: 'card-body' }, stepList([
+            { text: 'ตรวจและกรอกข้อมูลโรงเรียน และชื่อผู้ลงนามในเอกสาร', route: 'settings' },
+            { text: 'เพิ่มผู้ใช้: เจ้าหน้าที่การเงิน และผู้อำนวยการ', help: 'กำหนดรหัสผ่านชั่วคราว แล้วแจ้งผู้ใช้เป็นการส่วนตัว ผู้ใช้ต้องเปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งแรก', route: 'users' },
+            { text: 'ตรวจปีการศึกษาปัจจุบัน', route: 'years' },
+            { text: 'ดูประวัติการใช้งาน และตรวจความถูกต้องของประวัติ', route: 'audit' },
+          ])));
+      } else if (role === 'DIRECTOR') {
+        card = h('div', { class: 'card' },
+          h('div', { class: 'card-head' }, h('h2', { text: 'สิ่งที่ทำได้ในขณะนี้' })),
+          h('div', { class: 'card-body' }, stepList([
+            { text: 'ดูประวัติการใช้งานของทุกบัญชี และตรวจว่าประวัติไม่ถูกแก้ไข', route: 'audit' },
+            { text: 'ดูข้อมูลโรงเรียนและปีการศึกษา', route: 'settings' },
+            { text: 'Dashboard การเงินและการอนุมัติรายการจะเปิดใช้ในระยะถัดไป' },
+          ])));
+      } else {
+        card = h('div', { class: 'card' },
+          h('div', { class: 'card-head' }, h('h2', { text: 'งานการเงินที่จะเปิดใช้ในระยะถัดไป' })),
+          h('div', { class: 'card-body' }, stepList([
+            { text: 'ข้อมูลนักเรียนและการนำเข้าจาก Excel (ระยะที่ 3)' },
+            { text: 'ตั้งอัตราเงินบำรุง เรียกเก็บ และรับชำระ (ระยะที่ 4)' },
+            { text: 'ทะเบียนคุมใบเสร็จรับเงิน (ระยะที่ 5)' },
+            { text: 'ติดตามยอดค้าง รายงาน และพิมพ์เอกสาร (ระยะที่ 6–7)' },
+          ])));
+      }
+      return h('div', null,
+        pageHead('สวัสดี คุณ' + me.user.displayName, me.school.name + ' · ' + me.user.roleLabel),
+        h('div', { class: 'grid-cards' },
+          stat('ปีการศึกษาปัจจุบัน', String(me.school.currentAcademicYear)),
+          stat('บทบาทของคุณ', me.user.roleLabel),
+          stat('สถานะการพัฒนาระบบ', 'ระยะที่ 2 จาก 8')),
+        card);
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // ผู้ใช้งาน (ผู้ดูแลระบบ)
+  // ---------------------------------------------------------------------------
+  var ROLE_OPTIONS = [
+    { value: 'FINANCE', label: 'เจ้าหน้าที่การเงิน' },
+    { value: 'DIRECTOR', label: 'ผู้อำนวยการ' },
+    { value: 'ADMIN', label: 'ผู้ดูแลระบบ' },
+  ];
+  var STATUS_OPTIONS = [
+    { value: 'ACTIVE', label: 'ใช้งาน' },
+    { value: 'DISABLED', label: 'ปิดการใช้งาน' },
+  ];
+
+  function checkTempPassword(values) {
+    if (values.tempPassword !== values.confirmPassword) return Promise.reject({ message: 'รหัสผ่านชั่วคราวทั้งสองช่องไม่ตรงกัน' });
+    return null;
+  }
+
+  function openCreateUser() {
+    var googleMode = App.state.me.authMode === 'GOOGLE';
+    var fields = [
+      { key: 'username', label: 'ชื่อผู้ใช้', required: true, mono: true, autocapitalize: 'none', maxlength: 32, help: 'ภาษาอังกฤษตัวพิมพ์เล็ก เช่น somchai.k (เปลี่ยนภายหลังไม่ได้)' },
+      { key: 'displayName', label: 'ชื่อ-นามสกุล', required: true, maxlength: 100 },
+      { key: 'position', label: 'ตำแหน่ง', maxlength: 100 },
+      { key: 'email', label: 'อีเมล', type: 'email', required: googleMode, maxlength: 254, help: googleMode ? 'บัญชี Google ของโรงเรียนที่ใช้เข้าสู่ระบบ' : 'ไม่บังคับ' },
+      { key: 'role', label: 'บทบาท', type: 'select', options: ROLE_OPTIONS, value: 'FINANCE', required: true, span2: true },
+    ];
+    if (!googleMode) {
+      fields.push({ key: 'tempPassword', label: 'รหัสผ่านชั่วคราว', type: 'password', required: true, autocomplete: 'new-password' });
+      fields.push({ key: 'confirmPassword', label: 'ยืนยันรหัสผ่านชั่วคราว', type: 'password', required: true, autocomplete: 'new-password' });
+    }
+    App.formModal({
+      title: 'เพิ่มผู้ใช้',
+      intro: googleMode ? null : h('div', { class: 'alert alert-info' },
+        h('div', { text: 'ผู้ใช้ต้องเปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งแรก แจ้งรหัสผ่านชั่วคราวเป็นการส่วนตัวเท่านั้น รหัสผ่านต้อง:' }),
+        rulesList()),
+      fields: fields,
+      submitLabel: 'เพิ่มผู้ใช้',
+      onSubmit: function (v) {
+        return checkTempPassword(v) || App.api('users.create', {
+          username: v.username, displayName: v.displayName, position: v.position, email: v.email, role: v.role, tempPassword: v.tempPassword,
+        });
+      },
+      onDone: function (user) {
+        App.toast('เพิ่มผู้ใช้ ' + user.username + ' เรียบร้อยแล้ว', 'success');
+        App.refresh();
+      },
+    });
+  }
+
+  function openEditUser(user) {
+    var self = user.userId === App.state.me.user.userId;
+    App.formModal({
+      title: 'แก้ไขผู้ใช้: ' + user.username,
+      intro: self ? 'นี่คือบัญชีของคุณ จึงเปลี่ยนบทบาทหรือปิดการใช้งานไม่ได้' :
+        'ถ้าเปลี่ยนบทบาทหรือปิดการใช้งาน ผู้ใช้นี้จะถูกออกจากระบบทันที',
+      fields: [
+        { key: 'displayName', label: 'ชื่อ-นามสกุล', value: user.displayName, required: true, maxlength: 100 },
+        { key: 'position', label: 'ตำแหน่ง', value: user.position, maxlength: 100 },
+        { key: 'email', label: 'อีเมล', type: 'email', value: user.email, maxlength: 254, span2: true },
+        { key: 'role', label: 'บทบาท', type: 'select', options: ROLE_OPTIONS, value: user.role, disabled: self },
+        { key: 'status', label: 'สถานะ', type: 'select', options: STATUS_OPTIONS, value: user.status, disabled: self },
+      ],
+      onSubmit: function (v) {
+        return App.api('users.update', {
+          userId: user.userId, displayName: v.displayName, position: v.position, email: v.email, role: v.role, status: v.status,
+        });
+      },
+      onDone: function () {
+        App.toast('บันทึกข้อมูลผู้ใช้เรียบร้อยแล้ว', 'success');
+        if (self) App.reloadMe(); else App.refresh();
+      },
+    });
+  }
+
+  function openResetPassword(user) {
+    App.formModal({
+      title: 'รีเซ็ตรหัสผ่าน: ' + user.username,
+      intro: h('div', { class: 'alert alert-warning' },
+        h('div', { text: 'การเข้าสู่ระบบเดิมของผู้ใช้นี้จะหมดอายุทันที และผู้ใช้ต้องเปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งถัดไป รหัสผ่านชั่วคราวต้อง:' }),
+        rulesList()),
+      fields: [
+        { key: 'tempPassword', label: 'รหัสผ่านชั่วคราวใหม่', type: 'password', autocomplete: 'new-password' },
+        { key: 'confirmPassword', label: 'ยืนยันรหัสผ่านชั่วคราว', type: 'password', autocomplete: 'new-password' },
+      ],
+      submitLabel: 'รีเซ็ตรหัสผ่าน',
+      onSubmit: function (v) {
+        return checkTempPassword(v) || App.api('users.resetPassword', { userId: user.userId, tempPassword: v.tempPassword });
+      },
+      onDone: function () {
+        App.toast('รีเซ็ตรหัสผ่านของ ' + user.username + ' แล้ว แจ้งรหัสผ่านชั่วคราวเป็นการส่วนตัว', 'success');
+        App.refresh();
+      },
+    });
+  }
+
+  App.defineRoute('users', {
+    title: 'ผู้ใช้งาน',
+    roles: ['ADMIN'],
+    menu: { group: 'manage', label: 'ผู้ใช้งาน', icon: 'users' },
+    render: function () {
+      return App.api('users.list').then(function (users) {
+        var googleMode = App.state.me.authMode === 'GOOGLE';
+        var search = App.field({ label: 'ค้นหา', placeholder: 'ชื่อผู้ใช้ ชื่อ-นามสกุล หรือตำแหน่ง' });
+        var list = h('div');
+        function draw() {
+          var q = search.input.value.trim().toLowerCase();
+          var rows = users.filter(function (u) {
+            return !q || (u.username + ' ' + u.displayName + ' ' + (u.position || '') + ' ' + (u.email || '')).toLowerCase().indexOf(q) !== -1;
+          });
+          clear(list).appendChild(App.table({
+            rows: rows,
+            empty: 'ไม่พบผู้ใช้',
+            columns: [
+              { label: 'ชื่อผู้ใช้', render: function (u) { return h('span', { class: 'mono', text: u.username }); } },
+              { label: 'ชื่อ-นามสกุล', render: function (u) {
+                return h('div', null, h('div', { text: u.displayName }), u.position ? h('div', { class: 'muted small', text: u.position }) : null);
+              } },
+              { label: 'บทบาท', render: function (u) { return App.roleBadge(u.role); } },
+              { label: 'สถานะ', render: function (u) {
+                return h('div', null, App.badge(u.statusLabel, u.status === 'ACTIVE' ? 'success' : 'muted'), ' ',
+                  u.mustChangePassword && !googleMode ? App.badge('รอเปลี่ยนรหัสผ่าน', 'warning') : null);
+              } },
+              { label: 'เข้าสู่ระบบล่าสุด', render: function (u) { return App.fmt.datetime(u.lastLoginAt); } },
+              { label: 'จัดการ', className: 'actions', render: function (u) {
+                var self = u.userId === App.state.me.user.userId;
+                return [
+                  button('แก้ไข', 'secondary btn-sm', function () { openEditUser(u); }, 'edit'),
+                  !googleMode && !self ? button('รีเซ็ตรหัสผ่าน', 'secondary btn-sm', function () { openResetPassword(u); }, 'key') : null,
+                ];
+              } },
+            ],
+          }));
+        }
+        search.input.addEventListener('input', draw);
+        draw();
+        return h('div', null,
+          pageHead('ผู้ใช้งาน', 'เพิ่มผู้ใช้ กำหนดบทบาท และรีเซ็ตรหัสผ่าน (ไม่มีการลบผู้ใช้ ใช้ "ปิดการใช้งาน" แทน)',
+            button('เพิ่มผู้ใช้', '', openCreateUser, 'plus')),
+          h('div', { class: 'card' }, h('div', { class: 'card-body' }, h('div', { class: 'toolbar' }, search.wrap), list)));
+      });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // ตั้งค่าโรงเรียน (ทุกบทบาทดูได้ แก้ไขได้เฉพาะผู้ดูแลระบบ)
+  // ---------------------------------------------------------------------------
+  function settingInput(item, editable) {
+    var disabled = !editable || item.readOnly;
+    var help = item.description || '';
+    if ((item.type === 'int') && item.min !== null) help = (help ? help + ' ' : '') + '(' + item.min + '–' + item.max + ')';
+    if (item.type === 'bool') return App.field({ type: 'checkbox', label: item.label, value: item.value, help: help, disabled: disabled, span2: true });
+    if (item.type === 'list') return App.field({ type: 'textarea', label: item.label, value: item.value.join(', '), help: help, disabled: disabled, span2: true, rows: 2, maxlength: 1500 });
+    if (item.type === 'int' || item.type === 'year') return App.field({ type: 'number', label: item.label, value: item.value, min: item.min, max: item.max, help: help, disabled: disabled, inputmode: 'numeric' });
+    return App.field({ label: item.label, value: item.value, help: help, disabled: disabled, maxlength: 300, span2: item.key === 'SCHOOL_ADDRESS' || item.key === 'SCHOOL_AFFILIATION' });
+  }
+
+  function settingCurrentValue(item, f) {
+    if (item.type === 'bool') return f.input.checked;
+    if (item.type === 'list') return f.input.value.split(',').map(function (s) { return s.trim(); }).filter(Boolean).join(',');
+    return String(f.input.value).trim();
+  }
+
+  function settingOriginalValue(item) {
+    if (item.type === 'bool') return item.value;
+    if (item.type === 'list') return item.value.join(',');
+    return String(item.value === null || item.value === undefined ? '' : item.value);
+  }
+
+  App.defineRoute('settings', {
+    title: 'ตั้งค่าโรงเรียน',
+    roles: ALL,
+    menu: { group: 'info', label: 'ตั้งค่าโรงเรียน', icon: 'settings' },
+    render: function () {
+      return App.api('settings.get').then(function (data) {
+        var inputs = [];
+        var cards = data.groups.map(function (g) {
+          var grid = h('div', { class: 'form-grid' });
+          g.items.forEach(function (item) {
+            var f = settingInput(item, data.editable);
+            if (!item.readOnly) inputs.push({ item: item, field: f });
+            grid.appendChild(f.wrap);
+          });
+          return h('div', { class: 'card' }, h('div', { class: 'card-head' }, h('h2', { text: g.label })), h('div', { class: 'card-body' }, grid));
+        });
+        var footer;
+        if (data.editable) {
+          var save = button('บันทึกการเปลี่ยนแปลง', '', function () {
+            var values = {};
+            inputs.forEach(function (x) {
+              var current = settingCurrentValue(x.item, x.field);
+              if (current !== settingOriginalValue(x.item)) values[x.item.key] = current;
+            });
+            if (!Object.keys(values).length) { App.toast('ไม่มีค่าที่เปลี่ยนแปลง'); return; }
+            save.disabled = true;
+            App.api('settings.update', { values: values })
+              .then(function (res) {
+                App.toast('บันทึกค่าตั้งค่า ' + res.changed.length + ' รายการเรียบร้อยแล้ว', 'success');
+                return App.reloadMe();
+              })
+              .catch(App.fail)
+              .then(function () { save.disabled = false; });
+          }, 'check');
+          footer = h('div', { class: 'card card-body', style: { position: 'sticky', bottom: '12px', marginTop: '16px', display: 'flex', justifyContent: 'flex-end', gap: '10px', alignItems: 'center', flexWrap: 'wrap' } },
+            h('span', { class: 'muted small', text: 'ระบบบันทึกเฉพาะค่าที่เปลี่ยน และเก็บค่าเดิม/ค่าใหม่ไว้ในประวัติการใช้งาน' }), save);
+        } else {
+          footer = h('div', { class: 'alert alert-info', style: { marginTop: '16px' }, text: 'เฉพาะผู้ดูแลระบบเท่านั้นที่แก้ไขค่าตั้งค่าได้' });
+        }
+        return h('div', null,
+          pageHead('ตั้งค่าโรงเรียน', 'ข้อมูลโรงเรียน ผู้ลงนาม รายการที่ต้องอนุมัติ และความปลอดภัยในการเข้าสู่ระบบ'),
+          cards, footer);
+      });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // ปีการศึกษา (ทุกบทบาทดูได้ จัดการได้เฉพาะผู้ดูแลระบบ)
+  // ---------------------------------------------------------------------------
+  function openYearForm(year, years) {
+    var editing = !!year;
+    var nextYear = years.length ? Math.max.apply(null, years.map(function (y) { return y.year; })) + 1 : (App.state.me.school.currentAcademicYear || 2569);
+    var fields = editing ? [] : [
+      { key: 'year', label: 'ปีการศึกษา (พ.ศ.)', type: 'number', value: nextYear, required: true, inputmode: 'numeric', min: 2500, max: 2700 },
+    ];
+    fields = fields.concat([
+      { key: 'label', label: 'ชื่อที่แสดง', value: editing ? year.label : '', placeholder: 'เว้นว่าง = ปีการศึกษา ' + (editing ? year.year : nextYear), maxlength: 60, span2: !editing },
+      { key: 'startDate', label: 'วันเริ่มปีการศึกษา', type: 'date', value: editing ? year.startDate : '' },
+      { key: 'endDate', label: 'วันสิ้นสุดปีการศึกษา', type: 'date', value: editing ? year.endDate : '' },
+    ]);
+    if (editing) {
+      fields.push({ key: 'status', label: 'สถานะ', type: 'select', value: year.status, span2: true,
+        options: [{ value: 'OPEN', label: 'เปิด' }, { value: 'CLOSED', label: 'ปิดแล้ว (สร้างรายการเรียกเก็บใหม่ไม่ได้ แต่รับชำระหนี้ค้างได้)' }] });
+    }
+    App.formModal({
+      title: editing ? 'แก้ไข' + year.label : 'เพิ่มปีการศึกษา',
+      intro: 'วันที่ในช่องเลือกเป็นปี ค.ศ. ตามปฏิทินของเครื่อง ระบบแสดงผลเป็น พ.ศ. ให้ด้านล่างช่อง',
+      fields: fields,
+      onSubmit: function (v) {
+        if (editing) {
+          return App.api('years.update', { academicYearId: year.academicYearId, label: v.label || year.label, startDate: v.startDate, endDate: v.endDate, status: v.status });
+        }
+        return App.api('years.create', { year: v.year, label: v.label, startDate: v.startDate, endDate: v.endDate });
+      },
+      onDone: function () {
+        App.toast('บันทึกปีการศึกษาเรียบร้อยแล้ว', 'success');
+        App.reloadMe();
+      },
+    });
+  }
+
+  App.defineRoute('years', {
+    title: 'ปีการศึกษา',
+    roles: ALL,
+    menu: { group: 'info', label: 'ปีการศึกษา', icon: 'calendar' },
+    render: function () {
+      return App.api('years.list').then(function (years) {
+        var admin = App.state.me.user.role === 'ADMIN';
+        var columns = [
+          { label: 'ปีการศึกษา', render: function (y) {
+            return h('div', null, h('strong', { text: String(y.year) }), ' ', y.isCurrent ? App.badge('ปีปัจจุบัน', 'success') : null);
+          } },
+          { label: 'ชื่อที่แสดง', key: 'label' },
+          { label: 'ช่วงเวลา', render: function (y) {
+            return y.startDate || y.endDate ? App.fmt.date(y.startDate) + ' – ' + App.fmt.date(y.endDate) : 'ไม่ได้ระบุ';
+          } },
+          { label: 'สถานะ', render: function (y) { return App.badge(y.statusLabel, y.status === 'OPEN' ? 'success' : 'muted'); } },
+        ];
+        if (admin) {
+          columns.push({ label: 'จัดการ', className: 'actions', render: function (y) {
+            return [
+              button('แก้ไข', 'secondary btn-sm', function () { openYearForm(y, years); }, 'edit'),
+              !y.isCurrent && y.status === 'OPEN' ? button('ตั้งเป็นปีปัจจุบัน', 'secondary btn-sm', function () {
+                App.confirm('ตั้งปีการศึกษา ' + y.year + ' เป็นปีปัจจุบัน? ระบบจะใช้ปีนี้เป็นค่าเริ่มต้นในการเรียกเก็บและรายงาน', { confirmLabel: 'ตั้งเป็นปีปัจจุบัน' })
+                  .then(function (ok) {
+                    if (!ok) return null;
+                    return App.api('years.setCurrent', { academicYearId: y.academicYearId }).then(function () {
+                      App.toast('ตั้งปีการศึกษา ' + y.year + ' เป็นปีปัจจุบันแล้ว', 'success');
+                      return App.reloadMe();
+                    });
+                  })
+                  .catch(App.fail);
+              }, 'star') : null,
+            ];
+          } });
+        }
+        return h('div', null,
+          pageHead('ปีการศึกษา', 'ปีการศึกษาปัจจุบันใช้เป็นค่าเริ่มต้นของการเรียกเก็บและรายงาน ข้อมูลปีเก่าไม่ถูกลบ',
+            admin ? button('เพิ่มปีการศึกษา', '', function () { openYearForm(null, years); }, 'plus') : null),
+          h('div', { class: 'card' }, h('div', { class: 'card-body' }, App.table({ columns: columns, rows: years, empty: 'ยังไม่มีปีการศึกษา' }))));
+      });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // ประวัติการใช้งาน (ผู้ดูแลระบบ และผู้อำนวยการ)
+  // ---------------------------------------------------------------------------
+  var ACTION_KIND = {
+    LOGIN_FAILED: 'danger', ACCESS_DENIED: 'danger', CANCEL: 'danger', REJECT: 'danger',
+    CREATE: 'success', APPROVE: 'success', IMPORT: 'success',
+    UPDATE: 'warning', PASSWORD_CHANGE: 'warning', RESTORE: 'warning',
+    LOGIN: 'muted', LOGOUT: 'muted', INTEGRITY_CHECK: 'muted', SETUP: 'muted',
+  };
+
+  function kvTable(obj) {
+    if (!obj || typeof obj !== 'object') return h('p', { class: 'muted', text: 'ไม่มีข้อมูล' });
+    var keys = Object.keys(obj);
+    if (!keys.length) return h('p', { class: 'muted', text: 'ไม่มีข้อมูล' });
+    return h('table', { class: 'kv' }, h('tbody', null, keys.map(function (k) {
+      var v = obj[k];
+      var text = v === null || v === undefined || v === '' ? '–' : (typeof v === 'object' ? JSON.stringify(v) : String(v));
+      return h('tr', null, h('th', { text: k }), h('td', { text: text }));
+    })));
+  }
+
+  function openAuditDetail(item) {
+    var info = {
+      'วันเวลา': formatThaiDateTime_(item.timestamp),
+      'ผู้ใช้': item.username,
+      'บทบาท': item.roleLabel,
+      'การกระทำ': item.actionLabel,
+      'รายการ': item.entityLabel,
+      'รหัสรายการ': item.entityId,
+      'หมายเหตุ': item.note,
+      'รหัสประวัติ': item.logId,
+    };
+    App.modal({
+      title: 'รายละเอียดประวัติ',
+      size: 'lg',
+      body: [kvTable(info),
+        item.before ? [h('h3', { text: 'ค่าเดิม' }), kvTable(item.before)] : null,
+        item.after ? [h('h3', { text: 'ค่าใหม่' }), kvTable(item.after)] : null],
+      actions: [{ label: 'ปิด', kind: 'secondary' }],
+    });
+  }
+
+  function openVerifyResult(result) {
+    var body;
+    if (result.ok) {
+      body = h('div', { class: 'alert alert-success', text: 'ถูกต้อง: ประวัติการใช้งาน ' + result.total + ' รายการ ต่อเนื่องครบถ้วน ไม่พบการแก้ไขหรือลบ' });
+    } else {
+      body = [
+        h('div', { class: 'alert alert-error', text: 'พบปัญหา ' + result.problemCount + ' จุด จากประวัติทั้งหมด ' + result.total + ' รายการ' }),
+        App.table({ rows: result.problems, columns: [
+          { label: 'แถวในชีต', key: 'rowNumber' },
+          { label: 'รหัสประวัติ', render: function (p) { return h('span', { class: 'mono', text: p.logId || '–' }); } },
+          { label: 'ปัญหา', key: 'label' },
+        ] }),
+        h('p', { class: 'muted small', text: 'กรุณาตรวจสอบประวัติเวอร์ชันของไฟล์ Google Sheets (ไฟล์ > ประวัติเวอร์ชัน) และรายงานผู้อำนวยการ' }),
+      ];
+    }
+    App.modal({ title: 'ผลการตรวจความถูกต้องของประวัติ', size: 'lg', body: body, actions: [{ label: 'ปิด', kind: 'secondary' }] });
+  }
+
+  App.defineRoute('audit', {
+    title: 'ประวัติการใช้งาน',
+    roles: ['ADMIN', 'DIRECTOR'],
+    menu: { group: 'manage', label: 'ประวัติการใช้งาน', icon: 'history' },
+    render: function () {
+      var filters = { action: '', username: '', dateFrom: '', dateTo: '', q: '', page: 1 };
+      return App.api('audit.list', filters).then(function (first) {
+        var action = App.field({ label: 'การกระทำ', type: 'select', options: [{ value: '', label: 'ทั้งหมด' }].concat(first.actions) });
+        var username = App.field({ label: 'ชื่อผู้ใช้', autocapitalize: 'none', mono: true });
+        var dateFrom = App.field({ label: 'ตั้งแต่วันที่', type: 'date' });
+        var dateTo = App.field({ label: 'ถึงวันที่', type: 'date' });
+        var q = App.field({ label: 'คำค้น', placeholder: 'รหัสรายการ หรือหมายเหตุ' });
+        var results = h('div');
+
+        function draw(data) {
+          var pager = h('div', { class: 'pager' },
+            h('span', { class: 'muted small', text: 'ทั้งหมด ' + data.total.toLocaleString('th-TH') + ' รายการ · หน้า ' + data.page + ' จาก ' + data.pages }),
+            h('div', { class: 'toolbar', style: { marginBottom: '0' } },
+              button('ก่อนหน้า', 'secondary btn-sm', function () { load(data.page - 1); }),
+              button('ถัดไป', 'secondary btn-sm', function () { load(data.page + 1); })));
+          pager.querySelectorAll('button')[0].disabled = data.page <= 1;
+          pager.querySelectorAll('button')[1].disabled = data.page >= data.pages;
+          clear(results).appendChild(App.table({
+            rows: data.items,
+            empty: 'ไม่พบประวัติตามเงื่อนไข',
+            onRowClick: openAuditDetail,
+            columns: [
+              { label: 'วันเวลา', className: 'nowrap', render: function (r) { return App.fmt.datetime(r.timestamp); } },
+              { label: 'ผู้ใช้', render: function (r) { return h('div', null, h('div', { class: 'mono', text: r.username }), h('div', { class: 'muted small', text: r.roleLabel })); } },
+              { label: 'การกระทำ', render: function (r) { return App.badge(r.actionLabel, ACTION_KIND[r.action] || ''); } },
+              { label: 'รายการ', render: function (r) { return h('div', null, h('div', { text: r.entityLabel }), r.entityId ? h('div', { class: 'muted small mono', text: r.entityId }) : null); } },
+              { label: 'หมายเหตุ', key: 'note' },
+            ],
+          }));
+          results.appendChild(pager);
+        }
+
+        function load(page) {
+          filters = { action: action.get(), username: username.get(), dateFrom: dateFrom.get(), dateTo: dateTo.get(), q: q.get(), page: page || 1 };
+          return App.api('audit.list', filters).then(draw).catch(App.fail);
+        }
+
+        var searchBtn = button('ค้นหา', '', function () { load(1); }, 'search');
+        var resetBtn = button('ล้างเงื่อนไข', 'secondary', function () {
+          [username, dateFrom, dateTo, q].forEach(function (f) { f.input.value = ''; f.input.dispatchEvent(new Event('change')); });
+          action.input.value = '';
+          load(1);
+        });
+        var verifyBtn = button('ตรวจความถูกต้องของประวัติ', 'secondary', function () {
+          verifyBtn.disabled = true;
+          App.api('audit.verify')
+            .then(function (result) { openVerifyResult(result); return load(filters.page); })
+            .catch(App.fail)
+            .then(function () { verifyBtn.disabled = false; });
+        }, 'shield');
+        [username.input, q.input].forEach(function (input) {
+          input.addEventListener('keydown', function (e) { if (e.key === 'Enter') load(1); });
+        });
+        draw(first);
+        return h('div', null,
+          pageHead('ประวัติการใช้งาน', 'บันทึกทุกการเพิ่ม แก้ไข เข้าสู่ระบบ และการปฏิเสธสิทธิ์ แก้ไขหรือลบไม่ได้ คลิกรายการเพื่อดูค่าเดิมและค่าใหม่', verifyBtn),
+          h('div', { class: 'card' }, h('div', { class: 'card-body' },
+            h('div', { class: 'toolbar' }, action.wrap, username.wrap, dateFrom.wrap, dateTo.wrap, q.wrap),
+            h('div', { class: 'toolbar' }, searchBtn, resetBtn),
+            results)));
+      });
+    },
+  });
+
+  App.start();
+})();
+</script>
