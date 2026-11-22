@@ -11,7 +11,7 @@ const { buildBundle, OUT_FILE } = require('../scripts/build');
 const { createEnv, plain } = require('./harness');
 
 const PUBLIC_FUNCTIONS = ['doGet', 'onOpen', 'api', 'SetupDatabase', 'menuSetupDatabase', 'menuVerifyAuditLog',
-  'menuSetupAdmin', 'ownerSetupAdmin'];
+  'menuSetupAdmin', 'ownerSetupAdmin', 'dailyBackup'];
 
 function readBundle() {
   assert.ok(fs.existsSync(OUT_FILE), 'ไม่พบ dist/Code.gs กรุณารัน npm run build');

@@ -66,6 +66,22 @@ const EXPECTED = {
   'payments.get': ['FINANCE', 'DIRECTOR'],
   'payments.requestVoid': ['FINANCE'],
   'payments.requestCorrection': ['FINANCE'],
+  'dashboard.summary': ['FINANCE', 'DIRECTOR'],
+  'reports.daily': ['FINANCE', 'DIRECTOR'],
+  'reports.collections': ['FINANCE', 'DIRECTOR'],
+  'reports.cancelled': ['FINANCE', 'DIRECTOR'],
+  'reports.annual': ['FINANCE', 'DIRECTOR'],
+  'reports.receiptUsage': ['FINANCE', 'DIRECTOR'],
+  'reports.notices': ['FINANCE', 'DIRECTOR'],
+  'closings.list': ['FINANCE', 'DIRECTOR'],
+  'closings.close': ['FINANCE'],
+  'closings.reopen': ['DIRECTOR'],
+  'backups.status': ['ADMIN'],
+  'backups.list': ['ADMIN'],
+  'backups.create': ['ADMIN'],
+  'backups.setSchedule': ['ADMIN'],
+  'backups.restorePreview': ['ADMIN'],
+  'backups.restore': ['ADMIN'],
 };
 const PUBLIC = ['auth.login', 'auth.loginGoogle'];
 
@@ -196,6 +212,20 @@ test('คำตอบทุกคำสั่งส่งผ่าน google.scr
   }, tokens.FINANCE);
   call('receipts.requestCancelNumber', { bookId: reg.bookId, receiptNo: 2, reason: 'เขียนผิด', confirmKept: true }, tokens.FINANCE);
   call('approvals.list', { status: 'ALL' }, tokens.DIRECTOR);
+  // ระยะที่ 7: Dashboard รายงาน การปิดยอด และการสำรองข้อมูล
+  call('dashboard.summary', {}, tokens.DIRECTOR);
+  call('reports.daily', { date: '2026-11-21' }, tokens.FINANCE);
+  call('reports.collections', {}, tokens.DIRECTOR);
+  call('reports.cancelled', { periodType: 'fiscal' }, tokens.DIRECTOR);
+  call('reports.annual', {}, tokens.DIRECTOR);
+  call('reports.receiptUsage', {}, tokens.DIRECTOR);
+  call('reports.notices', {}, tokens.FINANCE);
+  call('closings.list', {}, tokens.DIRECTOR);
+  const backup = call('backups.create', {}, tokens.ADMIN).data.backup;
+  call('backups.list', {}, tokens.ADMIN);
+  call('backups.status', {}, tokens.ADMIN);
+  call('backups.setSchedule', { enabled: true, hour: 19 }, tokens.ADMIN);
+  call('backups.restorePreview', { fileId: backup.fileId }, tokens.ADMIN);
   const walk = (v, path) => {
     const tag = Object.prototype.toString.call(v);
     assert.notEqual(tag, '[object Date]', 'พบ Date ที่ ' + path);

@@ -210,8 +210,14 @@ function isBlankRow_(row) {
 /** อ่านทั้งชีตเป็นรายการ object (เก็บไว้ในหน่วยความจำจนกว่าจะได้ lock ใหม่) */
 function dbTable_(name) {
   if (DB_TABLES_[name]) return DB_TABLES_[name];
+  const table = readTable_(name, dbSheet_(name));
+  DB_TABLES_[name] = table;
+  return table;
+}
+
+/** อ่านชีตใดก็ได้ตาม SCHEMA (ใช้กับฐานข้อมูล และกับไฟล์สำรองตอนกู้คืน) ไม่เก็บแคช */
+function readTable_(name, sheet) {
   const schema = getSchema_(name);
-  const sheet = dbSheet_(name);
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
   if (lastRow < 1 || lastCol < 1) {
@@ -252,7 +258,6 @@ function dbTable_(name) {
     duplicateIds: duplicateIds,
     lastRow: lastRow,
   };
-  DB_TABLES_[name] = table;
   return table;
 }
 

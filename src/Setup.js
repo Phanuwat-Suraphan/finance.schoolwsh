@@ -181,6 +181,7 @@ function setupDatabase_(ss) {
     sheets: [],
     settingsAdded: [],
     academicYearCreated: null,
+    backupScheduleCreated: null,
     changed: false,
   };
 
@@ -192,10 +193,12 @@ function setupDatabase_(ss) {
   ensureDefaultSettings_(report);
   ensureDefaultAcademicYear_(report);
   ensurePasswordHashIterations_(report);
+  ensureDefaultBackupSchedule_(report);
 
   report.changed = report.propertiesInitialized.length > 0 ||
     report.settingsAdded.length > 0 ||
     report.academicYearCreated !== null ||
+    report.backupScheduleCreated !== null ||
     report.sheets.some(function (s) { return s.action !== 'ok'; });
 
   auditAppend_([{
@@ -358,6 +361,7 @@ function summarizeSetupReport_(report) {
     columnsAdded: {},
     settingsAdded: report.settingsAdded.slice(),
     academicYearCreated: report.academicYearCreated,
+    backupScheduleCreated: report.backupScheduleCreated,
     propertiesInitialized: report.propertiesInitialized.slice(),
     warnings: report.warnings.slice(),
   };
@@ -385,6 +389,9 @@ function formatSetupReport_(report) {
   added.forEach(function (s) { lines.push('เพิ่มคอลัมน์ในชีต ' + s.name + ': ' + s.addedColumns.join(', ')); });
   if (report.settingsAdded.length) lines.push('เพิ่มค่าตั้งค่าเริ่มต้น ' + report.settingsAdded.length + ' รายการ');
   if (report.academicYearCreated !== null) lines.push('สร้างปีการศึกษาเริ่มต้น ' + report.academicYearCreated);
+  if (report.backupScheduleCreated !== null) {
+    lines.push('ตั้งเวลาสำรองข้อมูลอัตโนมัติทุกวัน เวลาประมาณ ' + backupHourLabel_(report.backupScheduleCreated) + ' (เปลี่ยนได้ในหน้า "สำรองข้อมูล")');
+  }
   if (report.propertiesInitialized.length) {
     lines.push('สร้างค่าระบบใน Script Properties (ไม่แสดงค่า): ' + report.propertiesInitialized.join(', '));
   }

@@ -38,6 +38,10 @@ const PROP_KEYS = Object.freeze({
   AUTH_MODE: 'AUTH_MODE',                 // PASSWORD หรือ GOOGLE
   PASSWORD_PEPPER: 'PASSWORD_PEPPER',     // ค่าลับสำหรับแฮชรหัสผ่าน ห้ามแก้หรือลบ
   BACKUP_FOLDER_ID: 'BACKUP_FOLDER_ID',   // โฟลเดอร์สำรองข้อมูลใน Google Drive ของเจ้าของระบบ
+  BACKUP_SCHEDULE: 'BACKUP_SCHEDULE',     // การตั้งเวลาสำรองอัตโนมัติ (JSON: เปิด/ปิด ชั่วโมง รหัสตัวตั้งเวลา)
+  BACKUP_LAST: 'BACKUP_LAST',             // ไฟล์สำรองล่าสุดที่สำเร็จ (JSON: ไม่มีข้อมูลลับ)
+  BACKUP_LAST_AUTO: 'BACKUP_LAST_AUTO',   // ผลการสำรองอัตโนมัติครั้งล่าสุด (JSON)
+  SESSION_EPOCH: 'SESSION_EPOCH',         // เปลี่ยนค่าเมื่อกู้คืนข้อมูล เพื่อให้ทุกคนเข้าสู่ระบบใหม่
   AUDIT_HEAD: 'AUDIT_HEAD',               // ตำแหน่งและ hash ล่าสุดของ AuditLogs ใช้ตรวจการลบแถวท้ายชีต
   PASSWORD_HASH_ITERATIONS: 'PASSWORD_HASH_ITERATIONS', // จำนวนรอบแฮชรหัสผ่าน (ปรับตามความเร็วของเครื่อง Google ตอนติดตั้ง)
 });
@@ -162,6 +166,8 @@ const AUDIT_ACTIONS = Object.freeze({
   PROMOTE: 'PROMOTE',
   DAY_CLOSE: 'DAY_CLOSE',
   DAY_REOPEN: 'DAY_REOPEN',
+  BACKUP_SCHEDULE: 'BACKUP_SCHEDULE',
+  BACKUP_CLEANUP: 'BACKUP_CLEANUP',
 });
 
 const AUDIT_ACTION_LABELS = Object.freeze({
@@ -185,6 +191,8 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   PROMOTE: 'เลื่อนชั้น',
   DAY_CLOSE: 'ปิดยอดประจำวัน',
   DAY_REOPEN: 'เปิดยอดประจำวันใหม่',
+  BACKUP_SCHEDULE: 'ตั้งเวลาสำรองข้อมูลอัตโนมัติ',
+  BACKUP_CLEANUP: 'ย้ายไฟล์สำรองเก่าไปถังขยะ',
 });
 
 const SHEETS = Object.freeze({
@@ -673,5 +681,5 @@ const SETTINGS_DEFS = Object.freeze([
   { key: 'SESSION_MAX_HOURS', group: 'security', label: 'อายุสูงสุดของการเข้าสู่ระบบ (ชั่วโมง)', type: 'int', defaultValue: '8', min: 1, max: 12, description: 'ครบเวลานี้ต้องเข้าสู่ระบบใหม่ แม้ยังใช้งานอยู่' },
   { key: 'LOGIN_MAX_ATTEMPTS', group: 'security', label: 'ใส่รหัสผ่านผิดได้ไม่เกิน (ครั้ง)', type: 'int', defaultValue: '5', min: 3, max: 20, description: 'เกินจำนวนนี้ ชื่อผู้ใช้นั้นจะถูกล็อกชั่วคราว' },
   { key: 'LOGIN_LOCK_MINUTES', group: 'security', label: 'ระยะเวลาล็อกชั่วคราว (นาที)', type: 'int', defaultValue: '15', min: 5, max: 360, description: 'ระยะเวลาที่ห้ามเข้าสู่ระบบหลังใส่รหัสผ่านผิดเกินกำหนด' },
-  { key: 'BACKUP_RETENTION', group: 'backup', label: 'จำนวนไฟล์สำรองรายวันที่เก็บไว้', type: 'int', defaultValue: '60', min: 7, max: 365, description: 'ไม่นับไฟล์วันแรกของเดือนซึ่งเก็บถาวร (ใช้ในระยะที่ 7)' },
+  { key: 'BACKUP_RETENTION', group: 'backup', label: 'จำนวนไฟล์สำรองอัตโนมัติที่เก็บไว้', type: 'int', defaultValue: '60', min: 7, max: 365, description: 'ไฟล์สำรองอัตโนมัติไฟล์แรกของทุกเดือน ไฟล์ที่สำรองเอง และไฟล์ก่อนกู้คืน เก็บถาวรเสมอ ไม่นับในจำนวนนี้' },
 ]);

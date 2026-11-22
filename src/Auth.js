@@ -213,6 +213,7 @@ function createSession_(user, limits) {
   const session = {
     uid: user.UserId,
     ver: user.SessionVersion || 0,
+    ep: sessionEpoch_(),
     created: nowMs,
     seen: nowMs,
     idle: idleSeconds,
@@ -220,6 +221,11 @@ function createSession_(user, limits) {
   };
   CacheService.getScriptCache().put(sessionKey_(token), JSON.stringify(session), idleSeconds);
   return token;
+}
+
+/** ค่าที่เปลี่ยนเมื่อกู้คืนข้อมูล (session ที่สร้างก่อนหน้านั้นใช้ไม่ได้ทั้งหมด) */
+function sessionEpoch_() {
+  return PropertiesService.getScriptProperties().getProperty(PROP_KEYS.SESSION_EPOCH) || '';
 }
 
 function sessionExpiredError_(message) {
@@ -236,6 +242,10 @@ function authenticate_(token) {
   const key = sessionKey_(token);
   const session = safeJsonParse_(cache.get(key));
   if (!session || !session.uid) throw sessionExpiredError_();
+  if ((session.ep || '') !== sessionEpoch_()) {
+    cache.remove(key);
+    throw sessionExpiredError_('ผู้ดูแลระบบกู้คืนข้อมูลจากไฟล์สำรองแล้ว กรุณาเข้าสู่ระบบใหม่');
+  }
   const nowMs = now_().getTime();
   if (nowMs - session.created > session.maxMs) {
     cache.remove(key);

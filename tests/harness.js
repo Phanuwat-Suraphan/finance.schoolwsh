@@ -419,6 +419,8 @@ function createDrive(env) {
       getUrl: () => 'https://drive.google.com/drive/folders/' + rec.id,
       isTrashed: () => rec.trashed,
       setTrashed(b) { rec.trashed = !!b; return api; },
+      getDescription: () => rec.description || '',
+      setDescription(d) { rec.description = String(d); return api; },
       getDateCreated: () => new Date(rec.created),
       getParents: () => iteratorOf(Array.from(rec.parents).filter((p) => folders.has(p)).map(folderObj)),
       getFiles: () => iteratorOf(Array.from(env.spreadsheets.keys()).filter((fid) => env.driveMeta.get(fid).parents.has(rec.id)).map(fileObj)),

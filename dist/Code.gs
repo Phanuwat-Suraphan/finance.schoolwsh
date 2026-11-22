@@ -208,6 +208,7 @@ function setupDatabase_(ss) {
     sheets: [],
     settingsAdded: [],
     academicYearCreated: null,
+    backupScheduleCreated: null,
     changed: false,
   };
 
@@ -219,10 +220,12 @@ function setupDatabase_(ss) {
   ensureDefaultSettings_(report);
   ensureDefaultAcademicYear_(report);
   ensurePasswordHashIterations_(report);
+  ensureDefaultBackupSchedule_(report);
 
   report.changed = report.propertiesInitialized.length > 0 ||
     report.settingsAdded.length > 0 ||
     report.academicYearCreated !== null ||
+    report.backupScheduleCreated !== null ||
     report.sheets.some(function (s) { return s.action !== 'ok'; });
 
   auditAppend_([{
@@ -385,6 +388,7 @@ function summarizeSetupReport_(report) {
     columnsAdded: {},
     settingsAdded: report.settingsAdded.slice(),
     academicYearCreated: report.academicYearCreated,
+    backupScheduleCreated: report.backupScheduleCreated,
     propertiesInitialized: report.propertiesInitialized.slice(),
     warnings: report.warnings.slice(),
   };
@@ -412,6 +416,9 @@ function formatSetupReport_(report) {
   added.forEach(function (s) { lines.push('เพิ่มคอลัมน์ในชีต ' + s.name + ': ' + s.addedColumns.join(', ')); });
   if (report.settingsAdded.length) lines.push('เพิ่มค่าตั้งค่าเริ่มต้น ' + report.settingsAdded.length + ' รายการ');
   if (report.academicYearCreated !== null) lines.push('สร้างปีการศึกษาเริ่มต้น ' + report.academicYearCreated);
+  if (report.backupScheduleCreated !== null) {
+    lines.push('ตั้งเวลาสำรองข้อมูลอัตโนมัติทุกวัน เวลาประมาณ ' + backupHourLabel_(report.backupScheduleCreated) + ' (เปลี่ยนได้ในหน้า "สำรองข้อมูล")');
+  }
   if (report.propertiesInitialized.length) {
     lines.push('สร้างค่าระบบใน Script Properties (ไม่แสดงค่า): ' + report.propertiesInitialized.join(', '));
   }
@@ -630,6 +637,24 @@ function apiActions_() {
     'payments.get': { roles: FINANCE_VIEW, write: false, handler: paymentsGet_ },
     'payments.requestVoid': { roles: FINANCE, write: true, handler: paymentsRequestVoid_ },
     'payments.requestCorrection': { roles: FINANCE, write: true, handler: paymentsRequestCorrection_ },
+    // ภาพรวม รายงาน และการปิดยอดประจำวัน
+    'dashboard.summary': { roles: FINANCE_VIEW, write: false, handler: dashboardSummary_ },
+    'reports.daily': { roles: FINANCE_VIEW, write: false, handler: reportsDaily_ },
+    'reports.collections': { roles: FINANCE_VIEW, write: false, handler: reportsCollections_ },
+    'reports.cancelled': { roles: FINANCE_VIEW, write: false, handler: reportsCancelled_ },
+    'reports.annual': { roles: FINANCE_VIEW, write: false, handler: reportsAnnual_ },
+    'reports.receiptUsage': { roles: FINANCE_VIEW, write: false, handler: reportsReceiptUsage_ },
+    'reports.notices': { roles: FINANCE_VIEW, write: false, handler: reportsNotices_ },
+    'closings.list': { roles: FINANCE_VIEW, write: false, handler: closingsList_ },
+    'closings.close': { roles: FINANCE, write: true, handler: closingsClose_ },
+    'closings.reopen': { roles: DIRECTOR, write: true, handler: closingsReopen_ },
+    // สำรองและกู้คืนข้อมูล (ผู้ดูแลระบบ: เห็นเฉพาะรายชื่อไฟล์และจำนวนแถว ไม่เห็นรายละเอียดการเงิน)
+    'backups.status': { roles: ADMIN, write: false, handler: backupsStatus_ },
+    'backups.list': { roles: ADMIN, write: false, handler: backupsList_ },
+    'backups.create': { roles: ADMIN, write: true, handler: backupsCreate_ },
+    'backups.setSchedule': { roles: ADMIN, write: true, handler: backupsSetSchedule_ },
+    'backups.restorePreview': { roles: ADMIN, write: false, handler: backupsRestorePreview_ },
+    'backups.restore': { roles: ADMIN, write: true, handler: backupsRestore_ },
   };
   Object.keys(API_ACTIONS_).forEach(function (k) { Object.freeze(API_ACTIONS_[k]); });
   Object.freeze(API_ACTIONS_);
@@ -917,6 +942,7 @@ function createSession_(user, limits) {
   const session = {
     uid: user.UserId,
     ver: user.SessionVersion || 0,
+    ep: sessionEpoch_(),
     created: nowMs,
     seen: nowMs,
     idle: idleSeconds,
@@ -924,6 +950,11 @@ function createSession_(user, limits) {
   };
   CacheService.getScriptCache().put(sessionKey_(token), JSON.stringify(session), idleSeconds);
   return token;
+}
+
+/** ค่าที่เปลี่ยนเมื่อกู้คืนข้อมูล (session ที่สร้างก่อนหน้านั้นใช้ไม่ได้ทั้งหมด) */
+function sessionEpoch_() {
+  return PropertiesService.getScriptProperties().getProperty(PROP_KEYS.SESSION_EPOCH) || '';
 }
 
 function sessionExpiredError_(message) {
@@ -940,6 +971,10 @@ function authenticate_(token) {
   const key = sessionKey_(token);
   const session = safeJsonParse_(cache.get(key));
   if (!session || !session.uid) throw sessionExpiredError_();
+  if ((session.ep || '') !== sessionEpoch_()) {
+    cache.remove(key);
+    throw sessionExpiredError_('ผู้ดูแลระบบกู้คืนข้อมูลจากไฟล์สำรองแล้ว กรุณาเข้าสู่ระบบใหม่');
+  }
   const nowMs = now_().getTime();
   if (nowMs - session.created > session.maxMs) {
     cache.remove(key);
@@ -3994,6 +4029,7 @@ function voidPaymentRecords_(paymentId, reason, requestId, actor) {
   if (p.Status !== STATUS.PAYMENT.ACTIVE) {
     throw appError_(ERROR_CODES.CONFLICT, 'รายการรับเงินนี้' + (STATUS_LABELS.PAYMENT[p.Status] || p.Status) + 'แล้ว');
   }
+  assertDayOpen_(p.PaymentDate, 'ยกเลิกใบเสร็จของวันนั้น');
   const where = receiptWhere_(p.ReceiptBookNo, p.ReceiptNo);
   dbUpdate_(SHEETS.PAYMENTS, p.PaymentId, {
     Status: STATUS.PAYMENT.VOIDED,
@@ -4094,6 +4130,7 @@ function paymentsCreate_(ctx, payload) {
   const student = dbGet_(SHEETS.STUDENTS, studentId);
   if (!student) throw appError_(ERROR_CODES.NOT_FOUND, 'ไม่พบข้อมูลนักเรียน');
   const f = validatePaymentFields_(payload);
+  assertDayOpen_(f.paymentDate, 'บันทึกรับเงินในวันนั้น');
 
   // เล่มและเลขที่ใบเสร็จ
   const book = activeBook_();
@@ -4224,6 +4261,7 @@ function paymentsRequestVoid_(ctx, payload) {
   const reason = requireText_(payload.reason, 'เหตุผลการยกเลิกใบเสร็จ', { max: 500, multiline: true });
   requireKeptOriginal_(payload);
   assertNoPendingRequest_(p.PaymentId);
+  assertDayOpen_(p.PaymentDate, 'ยกเลิกใบเสร็จของวันนั้น');
   const entry = dbGet_(SHEETS.RECEIPT_ENTRIES, p.ReceiptEntryId);
   if (!entry || entry.Status !== STATUS.RECEIPT_ENTRY.USED) {
     throw appError_(ERROR_CODES.CONFLICT, 'สถานะของเลขที่ใบเสร็จนี้ไม่ใช่ "ใช้แล้ว" กรุณาตรวจสอบทะเบียนคุม');
@@ -4291,7 +4329,9 @@ function paymentsRequestCorrection_(ctx, payload) {
   const p = requireActivePayment_(payload.paymentId);
   const reason = requireText_(payload.reason, 'เหตุผลการแก้ไข', { max: 500, multiline: true });
   assertNoPendingRequest_(p.PaymentId);
+  assertDayOpen_(p.PaymentDate, 'แก้ไขรายการรับเงินของวันนั้น');
   const next = validateCorrection_(p, payload);
+  assertDayOpen_(next.paymentDate, 'ย้ายรายการรับเงินไปวันนั้น');
   const display = correctionDisplay_(p, next, ledgerContext_(), ledgerContextExcluding_(p.PaymentId));
   if (!display.some(function (d) { return d.changed; })) throw validationError_('ข้อมูลที่แก้ไขเหมือนรายการเดิมทุกช่อง');
   next.display = display;
@@ -4317,6 +4357,8 @@ function applyPaymentCorrection_(data, reason, requestId, actor) {
   if (old.Status !== STATUS.PAYMENT.ACTIVE) {
     throw appError_(ERROR_CODES.CONFLICT, 'รายการรับเงินเดิม' + (STATUS_LABELS.PAYMENT[old.Status] || old.Status) + 'แล้ว จึงแก้ไขไม่ได้');
   }
+  assertDayOpen_(old.PaymentDate, 'แก้ไขรายการรับเงินของวันนั้น');
+  assertDayOpen_(data.paymentDate, 'ย้ายรายการรับเงินไปวันนั้น');
   const entry = dbGet_(SHEETS.RECEIPT_ENTRIES, old.ReceiptEntryId);
   if (!entry || entry.Status !== STATUS.RECEIPT_ENTRY.USED || entry.PaymentId !== old.PaymentId) {
     throw appError_(ERROR_CODES.CONFLICT, 'สถานะของเลขที่ใบเสร็จนี้เปลี่ยนไปแล้ว กรุณาตรวจสอบทะเบียนคุม');
@@ -4575,6 +4617,1542 @@ function arrearsSummary_(ctx, payload) {
 }
 
 // ============================================================================
+// ไฟล์ต้นฉบับ: src/Closings.js
+// ============================================================================
+
+/**
+ * ============================================================================
+ *  Closings.gs — การปิดยอดประจำวัน (D-19, D-37)
+ * ----------------------------------------------------------------------------
+ *  - เจ้าหน้าที่การเงินพิมพ์รายงานรับเงินประจำวัน ตรวจกับเงินและสำเนาใบเสร็จ แล้วกด "ปิดยอด"
+ *  - ระบบเก็บ "รหัสตรวจสอบ" = SHA-256 ของรายการรับเงินที่มีผลในวันนั้น และพิมพ์ไว้ในรายงานที่ลงนาม
+ *    ถ้าข้อมูลของวันนั้นถูกแก้ภายหลัง (เช่น แก้ชีตด้วยมือ) รหัสที่คำนวณใหม่จะไม่ตรงกับกระดาษที่ลงนาม
+ *  - วันที่ปิดยอดแล้ว: บันทึกรับเงิน ขอยกเลิกใบเสร็จ หรือขอแก้ไขรายการที่มีวันที่นั้นไม่ได้
+ *    ต้องให้ผู้อำนวยการ "เปิดยอดใหม่" พร้อมเหตุผลก่อน (ประวัติการปิดยอดเดิมยังอยู่ในชีต)
+ *  - ปิดยอดไม่ได้ถ้ายังมีคำขอยกเลิกหรือแก้ไขใบเสร็จของวันนั้นที่รอพิจารณา
+ * ============================================================================
+ */
+
+const CLOSING_CONFIRM_TEXT = 'ตรวจนับเงินและสำเนาใบเสร็จตรงกับรายงานนี้แล้ว';
+const CLOSING_LOOKBACK_DAYS = 30; // ช่วงที่ใช้เตือน "ยังไม่ปิดยอด"
+
+/** การปิดยอดที่มีผลของวันที่ (ไม่นับที่เปิดยอดใหม่แล้ว) */
+function closingOf_(date) {
+  return dbFindOne_(SHEETS.DAILY_CLOSINGS, function (c) {
+    return c.ClosingDate === date && c.Status === STATUS.CLOSING.CLOSED;
+  });
+}
+
+/** วันที่ที่ปิดยอดแล้วทั้งหมด (ใช้ตรวจหลายวันในครั้งเดียว) */
+function closedDateSet_() {
+  const out = Object.create(null);
+  dbAll_(SHEETS.DAILY_CLOSINGS).forEach(function (c) {
+    if (c.Status === STATUS.CLOSING.CLOSED) out[c.ClosingDate] = c;
+  });
+  return out;
+}
+
+/** ห้ามเปลี่ยนรายการรับเงินของวันที่ปิดยอดแล้ว */
+function assertDayOpen_(date, what) {
+  if (!date || !closingOf_(date)) return;
+  throw appError_(ERROR_CODES.CONFLICT,
+    'วันที่ ' + formatThaiDate_(date) + ' ปิดยอดแล้ว จึง' + what + 'ไม่ได้ ' +
+    'ถ้าจำเป็นต้องแก้ไข ให้ผู้อำนวยการเปิดยอดของวันนั้นใหม่ (หน้า "รายงานและปิดยอด")', { reason: 'DAY_CLOSED' });
+}
+
+/** การรับเงินของวันที่ (รายการที่ถูกแก้ไขแทนแล้วไม่นับ เพราะรายการใหม่แสดงแทน) เรียงตามเล่มและเลขที่ */
+function paymentsOfDay_(date) {
+  return dbFind_(SHEETS.PAYMENTS, function (p) {
+    return p.PaymentDate === date && p.Status !== STATUS.PAYMENT.REPLACED;
+  }).sort(compareByReceipt_);
+}
+
+function compareByReceipt_(a, b) {
+  if (a.ReceiptBookNo !== b.ReceiptBookNo) return compareText_(a.ReceiptBookNo, b.ReceiptBookNo);
+  if (a.ReceiptNo !== b.ReceiptNo) return a.ReceiptNo - b.ReceiptNo;
+  return a.CreatedAt < b.CreatedAt ? -1 : (a.CreatedAt > b.CreatedAt ? 1 : 0);
+}
+
+/**
+ * ยอดของวัน: จำนวนใบเสร็จ ยอดรวม แยกช่องทาง ช่วงเลขที่ และรหัสตรวจสอบ
+ * รหัสตรวจสอบคิดจากรายการที่มีผลเท่านั้น (รหัส เล่ม เลขที่ นักเรียน จำนวนเงิน ช่องทาง เลขอ้างอิง)
+ */
+function dayFigures_(date, payments) {
+  const list = payments || paymentsOfDay_(date);
+  const active = list.filter(function (p) { return p.Status === STATUS.PAYMENT.ACTIVE; });
+  const byChannel = Object.create(null);
+  const books = Object.create(null);
+  let total = 0;
+  active.forEach(function (p) {
+    const satang = satangOf_(p.Amount);
+    total += satang;
+    const ch = byChannel[p.Channel] || (byChannel[p.Channel] = { channel: p.Channel, count: 0, satang: 0 });
+    ch.count += 1;
+    ch.satang += satang;
+    const b = books[p.ReceiptBookNo] || (books[p.ReceiptBookNo] = { bookNo: p.ReceiptBookNo, from: p.ReceiptNo, to: p.ReceiptNo });
+    b.from = Math.min(b.from, p.ReceiptNo);
+    b.to = Math.max(b.to, p.ReceiptNo);
+  });
+  const canonical = active.map(function (p) {
+    return [p.PaymentId, p.ReceiptBookNo, p.ReceiptNo, p.StudentId, satangOf_(p.Amount), p.Channel, p.ChannelRef];
+  });
+  const range = Object.keys(books).sort(compareText_).map(function (k) {
+    const b = books[k];
+    return 'เล่มที่ ' + b.bookNo + ' เลขที่ ' + (b.from === b.to ? b.from : b.from + '–' + b.to);
+  }).join(', ');
+  return {
+    date: date,
+    receiptCount: active.length,
+    voidedCount: list.length - active.length,
+    totalSatang: total,
+    byChannel: Object.keys(byChannel).sort(compareText_).map(function (k) { return byChannel[k]; }),
+    receiptRange: range,
+    digest: sha256Hex_(JSON.stringify([date, canonical])),
+  };
+}
+
+/** รหัสตรวจสอบสำหรับพิมพ์ (16 ตัวแรกของ SHA-256 แบ่งเป็นกลุ่มละ 4 ตัว) */
+function verifyCodeOf_(digest) {
+  if (!digest) return '';
+  return String(digest).slice(0, 16).toUpperCase().match(/.{4}/g).join('-');
+}
+
+/** คำขอที่รอพิจารณาและกระทบรายการรับเงินของวันที่ (ยกเลิกใบเสร็จ / แก้ไขรายการ ทั้งวันเดิมและวันใหม่) */
+function pendingRequestsOfDay_(date) {
+  const payments = Object.create(null);
+  dbAll_(SHEETS.PAYMENTS).forEach(function (p) { payments[p.PaymentId] = p; });
+  return dbFind_(SHEETS.APPROVAL_REQUESTS, function (r) {
+    if (r.Status !== STATUS.DECISION.PENDING) return false;
+    if (r.RequestType !== STATUS.REQUEST_TYPE.RECEIPT_CANCEL && r.RequestType !== STATUS.REQUEST_TYPE.PAYMENT_CORRECTION) return false;
+    const data = parseRequestData_(r);
+    const p = payments[data.paymentId || r.RefId];
+    if (p && p.PaymentDate === date) return true;
+    return r.RequestType === STATUS.REQUEST_TYPE.PAYMENT_CORRECTION && data.paymentDate === date;
+  });
+}
+
+function closingDto_(c, names) {
+  if (!c) return null;
+  let byChannel = [];
+  try { byChannel = c.ByChannelJson ? JSON.parse(c.ByChannelJson) : []; } catch (e) { byChannel = []; }
+  return {
+    closingId: c.ClosingId,
+    date: c.ClosingDate,
+    status: c.Status,
+    statusLabel: STATUS_LABELS.CLOSING[c.Status] || c.Status,
+    receiptCount: c.ReceiptCount,
+    totalSatang: satangOf_(c.TotalAmount),
+    byChannel: byChannel,
+    receiptRange: c.ReceiptRange,
+    digest: c.Digest,
+    verifyCode: verifyCodeOf_(c.Digest),
+    auditAnchor: c.AuditHash ? String(c.AuditHash).slice(0, 12).toUpperCase() : '',
+    closedBy: displayNameOf_(c.CreatedBy, names),
+    closedAt: c.CreatedAt,
+    reopenedBy: displayNameOf_(c.ReopenedBy, names),
+    reopenedAt: c.ReopenedAt,
+    reopenReason: c.ReopenReason,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// API
+// ---------------------------------------------------------------------------
+
+/**
+ * closings.close — ปิดยอดประจำวัน (เจ้าหน้าที่การเงิน)
+ * payload: { date, expectedDigest, confirmChecked: true }
+ * expectedDigest = รหัสตรวจสอบของรายงานที่เจ้าหน้าที่เปิดดูอยู่ ถ้าข้อมูลเปลี่ยนไประหว่างนั้นจะปิดยอดไม่ได้
+ */
+function closingsClose_(ctx, payload) {
+  const date = requireIsoDate_(payload.date, 'วันที่ปิดยอด');
+  if (date > todayIso_()) throw validationError_('ปิดยอดล่วงหน้าไม่ได้');
+  if (payload.confirmChecked !== true) throw validationError_('กรุณาติ๊กยืนยันว่า' + CLOSING_CONFIRM_TEXT);
+  if (closingOf_(date)) {
+    throw appError_(ERROR_CODES.CONFLICT, 'วันที่ ' + formatThaiDate_(date) + ' ปิดยอดแล้ว', { reason: 'DAY_CLOSED' });
+  }
+  const payments = paymentsOfDay_(date);
+  const fig = dayFigures_(date, payments);
+  if (!payments.length) throw validationError_('ไม่มีรายการรับเงินในวันที่ ' + formatThaiDate_(date) + ' จึงไม่ต้องปิดยอด');
+  const pending = pendingRequestsOfDay_(date);
+  if (pending.length) {
+    throw appError_(ERROR_CODES.CONFLICT, 'ยังมีคำขอยกเลิกหรือแก้ไขใบเสร็จของวันนี้ที่รอผู้อำนวยการพิจารณา ' + pending.length +
+      ' รายการ กรุณารอผลการพิจารณาก่อนปิดยอด', { reason: 'PENDING_REQUEST' });
+  }
+  if (typeof payload.expectedDigest !== 'string' || payload.expectedDigest !== fig.digest) {
+    throw appError_(ERROR_CODES.CONFLICT, 'รายการรับเงินของวันนี้เปลี่ยนไปหลังจากเปิดรายงาน กรุณาโหลดรายงานใหม่และตรวจอีกครั้งก่อนปิดยอด',
+      { reason: 'DAY_CHANGED' });
+  }
+  const actor = actorFromCtx_(ctx);
+  const closing = dbInsert_(SHEETS.DAILY_CLOSINGS, {
+    ClosingDate: date,
+    Status: STATUS.CLOSING.CLOSED,
+    ReceiptCount: fig.receiptCount,
+    TotalAmount: satangToBaht_(fig.totalSatang),
+    ByChannelJson: JSON.stringify(fig.byChannel),
+    ReceiptRange: fig.receiptRange,
+    Digest: fig.digest,
+    AuditHash: auditState_().lastHash,
+  }, actor, {
+    action: AUDIT_ACTIONS.DAY_CLOSE,
+    note: 'ปิดยอดวันที่ ' + formatThaiDate_(date) + ' ใบเสร็จ ' + fig.receiptCount + ' ฉบับ รวม ' + formatSatang_(fig.totalSatang, true),
+  });
+  return {
+    closing: closingDto_(closing, userDisplayNames_()),
+    message: 'ปิดยอดวันที่ ' + formatThaiDate_(date) + ' เรียบร้อยแล้ว รหัสตรวจสอบ ' + verifyCodeOf_(fig.digest),
+  };
+}
+
+/** closings.reopen — เปิดยอดของวันที่ปิดแล้วใหม่ (ผู้อำนวยการ ต้องมีเหตุผล) payload: { date, reason } */
+function closingsReopen_(ctx, payload) {
+  const date = requireIsoDate_(payload.date, 'วันที่');
+  const reason = requireText_(payload.reason, 'เหตุผลการเปิดยอดใหม่', { max: 500, multiline: true });
+  const c = closingOf_(date);
+  if (!c) throw appError_(ERROR_CODES.CONFLICT, 'วันที่ ' + formatThaiDate_(date) + ' ยังไม่ได้ปิดยอด');
+  const actor = actorFromCtx_(ctx);
+  dbUpdate_(SHEETS.DAILY_CLOSINGS, c.ClosingId, {
+    Status: STATUS.CLOSING.REOPENED,
+    ReopenedAt: nowIso_(),
+    ReopenedBy: actor.username,
+    ReopenReason: reason,
+  }, actor, { action: AUDIT_ACTIONS.DAY_REOPEN, note: 'เปิดยอดวันที่ ' + formatThaiDate_(date) + ' ใหม่: ' + reason });
+  return { message: 'เปิดยอดวันที่ ' + formatThaiDate_(date) + ' ใหม่แล้ว เจ้าหน้าที่การเงินแก้ไขรายการแล้วต้องปิดยอดอีกครั้ง' };
+}
+
+/**
+ * closings.list — สถานะการปิดยอดรายวันในช่วงวันที่ (ไม่เกิน 92 วัน ค่าเริ่มต้น 30 วันล่าสุด)
+ * แสดงเฉพาะวันที่มีการรับเงินหรือเคยปิดยอด
+ */
+function closingsList_(ctx, payload) {
+  const today = todayIso_();
+  const toDate = requireIsoDate_(isBlankInput_(payload.toDate) ? today : payload.toDate, 'วันที่สิ้นสุด');
+  const fromDate = requireIsoDate_(isBlankInput_(payload.fromDate) ? addDaysIso_(toDate, -(CLOSING_LOOKBACK_DAYS - 1)) : payload.fromDate, 'วันที่เริ่มต้น');
+  if (toDate < fromDate) throw validationError_('วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มต้น');
+  if (daysBetween_(fromDate, toDate) >= PAYMENT_LIST_MAX_DAYS) throw validationError_('ดูได้ครั้งละไม่เกิน ' + PAYMENT_LIST_MAX_DAYS + ' วัน');
+  const names = userDisplayNames_();
+  const days = Object.create(null);
+  const dayOf = function (d) {
+    return days[d] || (days[d] = { date: d, payments: [], closing: null, history: [] });
+  };
+  dbFind_(SHEETS.PAYMENTS, function (p) {
+    return p.PaymentDate >= fromDate && p.PaymentDate <= toDate && p.Status !== STATUS.PAYMENT.REPLACED;
+  }).forEach(function (p) { dayOf(p.PaymentDate).payments.push(p); });
+  dbFind_(SHEETS.DAILY_CLOSINGS, function (c) { return c.ClosingDate >= fromDate && c.ClosingDate <= toDate; })
+    .sort(function (a, b) { return a.CreatedAt < b.CreatedAt ? 1 : -1; })
+    .forEach(function (c) {
+      const d = dayOf(c.ClosingDate);
+      if (c.Status === STATUS.CLOSING.CLOSED) d.closing = closingDto_(c, names);
+      else d.history.push(closingDto_(c, names));
+    });
+  const rows = Object.keys(days).sort().reverse().map(function (k) {
+    const d = days[k];
+    const fig = dayFigures_(k, d.payments.sort(compareByReceipt_));
+    return {
+      date: k,
+      receiptCount: fig.receiptCount,
+      voidedCount: fig.voidedCount,
+      totalSatang: fig.totalSatang,
+      receiptRange: fig.receiptRange,
+      closed: !!d.closing,
+      closing: d.closing,
+      changedAfterClose: !!d.closing && d.closing.digest !== fig.digest,
+      reopenCount: d.history.length,
+      history: d.history,
+    };
+  });
+  return {
+    fromDate: fromDate,
+    toDate: toDate,
+    today: today,
+    rows: rows,
+    unclosedCount: rows.filter(function (r) { return !r.closed && r.date < today && r.receiptCount + r.voidedCount > 0; }).length,
+    canClose: ctx.role === ROLES.FINANCE,
+    canReopen: ctx.role === ROLES.DIRECTOR,
+  };
+}
+
+/** จำนวนวันที่รับเงินแล้วแต่ยังไม่ปิดยอด ใน 30 วันล่าสุด (ไม่นับวันนี้) — ใช้แสดงเตือนในหน้าแรก */
+function unclosedDaysCount_() {
+  const today = todayIso_();
+  const from = addDaysIso_(today, -CLOSING_LOOKBACK_DAYS);
+  const closed = closedDateSet_();
+  const seen = Object.create(null);
+  dbAll_(SHEETS.PAYMENTS).forEach(function (p) {
+    if (p.PaymentDate >= from && p.PaymentDate < today && p.Status !== STATUS.PAYMENT.REPLACED && !closed[p.PaymentDate]) seen[p.PaymentDate] = true;
+  });
+  return Object.keys(seen).length;
+}
+
+/** บวกหรือลบจำนวนวันจากวันที่ ISO */
+function addDaysIso_(iso, days) {
+  const p = String(iso).split('-').map(Number);
+  const d = new Date(Date.UTC(p[0], p[1] - 1, p[2] + days));
+  return d.getUTCFullYear() + '-' + ('0' + (d.getUTCMonth() + 1)).slice(-2) + '-' + ('0' + d.getUTCDate()).slice(-2);
+}
+
+// ============================================================================
+// ไฟล์ต้นฉบับ: src/Reports.js
+// ============================================================================
+
+/**
+ * ============================================================================
+ *  Reports.gs — ข้อมูลของรายงานแบบทางการ (หน้าเว็บจัดรูปแบบสำหรับพิมพ์หรือบันทึกเป็น PDF)
+ * ----------------------------------------------------------------------------
+ *  ทุกรายงานคำนวณจากข้อมูลในชีตทุกครั้ง ไม่มีตารางสรุปที่เก็บแยกไว้ และพิมพ์วันเวลาที่ออกรายงานเสมอ
+ *   1. เอกสารแจ้งยอดเรียกเก็บเงิน ............ reports.notices
+ *   2. รายงานการรับเงินประจำวัน (และปิดยอด) ... reports.daily + closings.*
+ *   3. รายงานการรับเงินแยกตามห้อง ............ reports.collections
+ *   4. รายงานการรับเงินแยกตามระดับชั้น ........ reports.collections
+ *   5. รายงานยอดค้างชำระ .................... arrears.summary (Arrears.gs)
+ *   6. รายงานทะเบียนคุมใบเสร็จ ............... receipts.book (Receipts.gs)
+ *   7. รายงานใบเสร็จยกเลิก ................... reports.cancelled
+ *   8. รายงานสรุปประจำปีการศึกษา ............. reports.annual
+ *   9. รายงานการใช้ใบเสร็จประจำปีงบประมาณ ...... reports.receiptUsage (D-15)
+ *  ช่วงเวลาเลือกได้ทั้งปีการศึกษา ปีงบประมาณ เดือน หรือกำหนดเอง (D-18)
+ *  ช่วงของปีการศึกษาในรายงานคือ 1 พ.ค.–30 เม.ย. ต่อเนื่องกันทุกปี เพื่อไม่ให้มีวันที่หล่นหาย (D-39)
+ * ============================================================================
+ */
+
+const REPORT_MAX_DAYS = 400;
+const REPORT_PERIOD_TYPES = Object.freeze(['academic', 'fiscal', 'month', 'range']);
+const NOTICE_MAX_STUDENTS = 600;
+
+function reportSigners_() {
+  return {
+    financeName: getSetting_('FINANCE_OFFICER_NAME'),
+    financePosition: getSetting_('FINANCE_OFFICER_POSITION'),
+    directorName: getSetting_('DIRECTOR_NAME'),
+    directorPosition: getSetting_('DIRECTOR_POSITION'),
+  };
+}
+
+/** หัวรายงาน: ข้อมูลโรงเรียน ผู้ลงนาม และผู้ออกรายงาน */
+function reportMeta_(ctx) {
+  const school = schoolInfo_();
+  school.phone = getSetting_('SCHOOL_PHONE');
+  return {
+    school: school,
+    signers: reportSigners_(),
+    generatedAt: nowIso_(),
+    generatedBy: ctx.displayName || ctx.username,
+  };
+}
+
+/** ช่วงวันที่ของรายงาน payload: { periodType, year, fiscalYear, month: 'YYYY-MM', fromDate, toDate } */
+function reportPeriod_(payload) {
+  const type = isBlankInput_(payload.periodType) ? 'academic' : requireEnum_(payload.periodType, REPORT_PERIOD_TYPES, 'ช่วงเวลาของรายงาน');
+  let from;
+  let to;
+  let label;
+  if (type === 'academic') {
+    const year = isBlankInput_(payload.year) ? currentAcademicYear_() : requireInt_(payload.year, 'ปีการศึกษา', { min: 2500, max: 2700 });
+    const r = academicYearRange_(year);
+    from = r.from;
+    to = r.to;
+    label = 'ปีการศึกษา ' + year;
+  } else if (type === 'fiscal') {
+    const fy = isBlankInput_(payload.fiscalYear) ? fiscalYearOfDate_(todayIso_()) : requireInt_(payload.fiscalYear, 'ปีงบประมาณ', { min: 2500, max: 2700 });
+    const r = fiscalYearRange_(fy);
+    from = r.from;
+    to = r.to;
+    label = 'ปีงบประมาณ ' + fy;
+  } else if (type === 'month') {
+    const m = requireText_(payload.month, 'เดือน', { max: 7, pattern: /^\d{4}-(0[1-9]|1[0-2])$/, patternMessage: 'เดือนไม่ถูกต้อง' });
+    from = m + '-01';
+    const p = m.split('-').map(Number);
+    to = addDaysIso_(p[1] === 12 ? (p[0] + 1) + '-01-01' : p[0] + '-' + ('0' + (p[1] + 1)).slice(-2) + '-01', -1);
+    label = 'เดือน' + formatThaiMonth_(m);
+  } else {
+    from = requireIsoDate_(payload.fromDate, 'วันที่เริ่มต้น');
+    to = requireIsoDate_(isBlankInput_(payload.toDate) ? from : payload.toDate, 'วันที่สิ้นสุด');
+    if (to < from) throw validationError_('วันที่สิ้นสุดต้องไม่ก่อนวันที่เริ่มต้น');
+    if (daysBetween_(from, to) >= REPORT_MAX_DAYS) throw validationError_('เลือกช่วงวันที่ได้ไม่เกิน ' + REPORT_MAX_DAYS + ' วัน');
+    label = from === to ? 'วันที่ ' + formatThaiDate_(from) : 'ระหว่างวันที่ ' + formatThaiDate_(from) + ' ถึง ' + formatThaiDate_(to);
+  }
+  return { type: type, from: from, to: to, label: label, rangeLabel: formatThaiDate_(from) + ' – ' + formatThaiDate_(to) };
+}
+
+function studentsById_() {
+  const out = Object.create(null);
+  dbAll_(SHEETS.STUDENTS).forEach(function (s) { out[s.StudentId] = s; });
+  return out;
+}
+
+function studentNameOf_(s) {
+  return s ? studentDisplayName_(s.Prefix, s.FirstName, s.LastName) : '';
+}
+
+function gradeOrder_(levels) {
+  return function (a, b) {
+    const ga = levels.indexOf(a);
+    const gb = levels.indexOf(b);
+    return (ga === -1 ? 999 : ga) - (gb === -1 ? 999 : gb) || compareText_(a, b);
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 2. รายงานการรับเงินประจำวัน
+// ---------------------------------------------------------------------------
+
+/** reports.daily — รายการรับเงินของวัน เรียงตามเล่มและเลขที่ใบเสร็จ พร้อมสถานะการปิดยอด payload: { date } */
+function reportsDaily_(ctx, payload) {
+  const date = requireIsoDate_(isBlankInput_(payload.date) ? todayIso_() : payload.date, 'วันที่');
+  const payments = paymentsOfDay_(date);
+  const fig = dayFigures_(date, payments);
+  const lc = ledgerContext_();
+  const labels = allocationLabels_(lc);
+  const names = userDisplayNames_();
+  const students = studentsById_();
+  const enroll = latestEnrollments_();
+  const rows = payments.map(function (p) {
+    const s = students[p.StudentId];
+    const e = enroll[p.StudentId];
+    const dto = paymentDto_(p, lc, labels, names);
+    return {
+      paymentId: p.PaymentId,
+      bookNo: p.ReceiptBookNo,
+      receiptNo: p.ReceiptNo,
+      studentNo: s ? s.StudentNo : '',
+      studentName: studentNameOf_(s),
+      classLabel: e ? classLabel_(e.GradeLevel, e.Room) : '',
+      items: dto.allocations.map(function (al) { return al.label; }),
+      channel: p.Channel,
+      channelRef: p.ChannelRef,
+      amountSatang: satangOf_(p.Amount),
+      status: p.Status,
+      statusLabel: STATUS_LABELS.PAYMENT[p.Status] || p.Status,
+      voidReason: p.VoidReason,
+      corrected: !!p.ReplacesPaymentId,
+      receivedByName: p.ReceivedByName,
+      createdBy: dto.createdBy,
+    };
+  });
+  const spoiled = dbFind_(SHEETS.RECEIPT_CANCELLATIONS, function (c) {
+    return c.CancelType === STATUS.CANCEL_TYPE.SPOILED && String(c.CreatedAt).slice(0, 10) === date;
+  }).sort(function (a, b) { return compareText_(a.BookNo, b.BookNo) || a.ReceiptNo - b.ReceiptNo; })
+    .map(function (c) {
+      return { bookNo: c.BookNo, receiptNo: c.ReceiptNo, reason: c.Reason, status: c.Status, statusLabel: STATUS_LABELS.DECISION[c.Status] || c.Status };
+    });
+  const closingRec = closingOf_(date);
+  const history = dbFind_(SHEETS.DAILY_CLOSINGS, function (c) {
+    return c.ClosingDate === date && c.Status === STATUS.CLOSING.REOPENED;
+  }).sort(function (a, b) { return a.CreatedAt < b.CreatedAt ? -1 : 1; }).map(function (c) { return closingDto_(c, names); });
+  const pendingCount = pendingRequestsOfDay_(date).length;
+  const closing = closingDto_(closingRec, names);
+  return {
+    date: date,
+    today: todayIso_(),
+    rows: rows,
+    spoiled: spoiled,
+    figures: {
+      receiptCount: fig.receiptCount,
+      voidedCount: fig.voidedCount,
+      totalSatang: fig.totalSatang,
+      totalText: bahtText_(fig.totalSatang),
+      byChannel: fig.byChannel,
+      receiptRange: fig.receiptRange,
+      digest: fig.digest,
+      verifyCode: verifyCodeOf_(fig.digest),
+    },
+    closing: closing,
+    matches: closing ? closing.digest === fig.digest : null,
+    history: history,
+    pendingCount: pendingCount,
+    canClose: ctx.role === ROLES.FINANCE && !closing && payments.length > 0 && pendingCount === 0 && date <= todayIso_(),
+    canReopen: ctx.role === ROLES.DIRECTOR && !!closing,
+    confirmText: CLOSING_CONFIRM_TEXT,
+    meta: reportMeta_(ctx),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 3–4. รายงานการรับเงินแยกตามห้องและระดับชั้น
+// ---------------------------------------------------------------------------
+
+function newCollectionGroup_(base) {
+  return Object.assign(base, { studentSet: Object.create(null), paymentSet: Object.create(null), satang: 0 });
+}
+
+function addCollection_(g, al, satang) {
+  g.studentSet[al.StudentId] = true;
+  g.paymentSet[al.PaymentId] = true;
+  g.satang += satang;
+}
+
+function finishCollection_(g) {
+  g.students = Object.keys(g.studentSet).length;
+  g.receipts = Object.keys(g.paymentSet).length;
+  delete g.studentSet;
+  delete g.paymentSet;
+  return g;
+}
+
+/**
+ * reports.collections — เงินที่รับในช่วงเวลา แยกตามชั้นและห้องของรายการเรียกเก็บ (ชั้น/ห้อง ณ วันที่เรียกเก็บ)
+ * ยอดค้างจากปีก่อนที่รับในช่วงนี้แสดงเป็นกลุ่มของปีการศึกษานั้นแยกต่างหาก ยอดรวมทุกกลุ่มเท่ากับเงินที่รับจริง
+ */
+function reportsCollections_(ctx, payload) {
+  const period = reportPeriod_(payload);
+  const levels = gradeLevels_();
+  const pay = Object.create(null);
+  const byChannel = Object.create(null);
+  let totalSatang = 0;
+  let receiptCount = 0;
+  dbAll_(SHEETS.PAYMENTS).forEach(function (p) {
+    if (p.Status !== STATUS.PAYMENT.ACTIVE || p.PaymentDate < period.from || p.PaymentDate > period.to) return;
+    const satang = satangOf_(p.Amount);
+    pay[p.PaymentId] = p;
+    totalSatang += satang;
+    receiptCount += 1;
+    const ch = byChannel[p.Channel] || (byChannel[p.Channel] = { channel: p.Channel, count: 0, satang: 0 });
+    ch.count += 1;
+    ch.satang += satang;
+  });
+  const asms = Object.create(null);
+  dbAll_(SHEETS.FEE_ASSESSMENTS).forEach(function (a) { asms[a.AssessmentId] = a; });
+  const grades = Object.create(null);
+  const allStudents = Object.create(null);
+  let allocated = 0;
+  dbAll_(SHEETS.PAYMENT_ALLOCATIONS).forEach(function (al) {
+    if (al.Status !== STATUS.ALLOCATION.ACTIVE || !pay[al.PaymentId]) return;
+    const asm = asms[al.AssessmentId];
+    const year = asm ? asm.AcademicYear : al.AcademicYear;
+    const grade = asm ? asm.GradeLevel : '';
+    const room = asm ? asm.Room : '';
+    const satang = satangOf_(al.Amount);
+    allocated += satang;
+    allStudents[al.StudentId] = true;
+    const gk = year + '|' + grade;
+    const g = grades[gk] || (grades[gk] = newCollectionGroup_({ year: year, gradeLevel: grade, label: grade || 'ไม่ระบุชั้น', rooms: Object.create(null) }));
+    addCollection_(g, al, satang);
+    const r = g.rooms[room] || (g.rooms[room] = newCollectionGroup_({ year: year, gradeLevel: grade, room: room, label: classLabel_(grade, room) || 'ไม่ระบุห้อง' }));
+    addCollection_(r, al, satang);
+  });
+  const byGrade = gradeOrder_(levels);
+  const gradeList = Object.keys(grades).map(function (k) { return grades[k]; })
+    .sort(function (a, b) { return b.year - a.year || byGrade(a.gradeLevel, b.gradeLevel); })
+    .map(function (g) {
+      g.rooms = Object.keys(g.rooms).sort(compareRoom_).map(function (k) { return finishCollection_(g.rooms[k]); });
+      return finishCollection_(g);
+    });
+  return {
+    period: period,
+    grades: gradeList,
+    years: gradeList.map(function (g) { return g.year; }).filter(function (y, i, a) { return a.indexOf(y) === i; }),
+    total: { students: Object.keys(allStudents).length, receipts: receiptCount, satang: totalSatang, text: bahtText_(totalSatang) },
+    byChannel: Object.keys(byChannel).sort(compareText_).map(function (k) { return byChannel[k]; }),
+    unallocatedSatang: totalSatang - allocated,
+    meta: reportMeta_(ctx),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 7. รายงานใบเสร็จยกเลิก
+// ---------------------------------------------------------------------------
+
+/** reports.cancelled — คำขอยกเลิกเลขที่/ใบเสร็จที่ยื่นในช่วงเวลา (ทุกผลการพิจารณา) เรียงตามเล่มและเลขที่ */
+function reportsCancelled_(ctx, payload) {
+  const period = reportPeriod_(payload);
+  const names = userDisplayNames_();
+  const students = studentsById_();
+  const payments = Object.create(null);
+  dbAll_(SHEETS.PAYMENTS).forEach(function (p) { payments[p.PaymentId] = p; });
+  const entries = Object.create(null);
+  dbAll_(SHEETS.RECEIPT_ENTRIES).forEach(function (e) { entries[e.EntryId] = e; });
+  const totals = { voidCount: 0, voidSatang: 0, spoiledCount: 0, pendingCount: 0, notApprovedCount: 0 };
+  const rows = dbFind_(SHEETS.RECEIPT_CANCELLATIONS, function (c) {
+    const d = String(c.CreatedAt).slice(0, 10);
+    return d >= period.from && d <= period.to;
+  }).map(function (c) {
+    const p = c.PaymentId ? payments[c.PaymentId] : null;
+    const e = entries[c.EntryId];
+    const s = students[p ? p.StudentId : (e ? e.StudentId : '')];
+    const amount = c.Amount === null || c.Amount === '' ? null : satangOf_(c.Amount);
+    if (c.Status === STATUS.DECISION.APPROVED) {
+      if (c.CancelType === STATUS.CANCEL_TYPE.VOID_PAYMENT) {
+        totals.voidCount += 1;
+        totals.voidSatang += amount || 0;
+      } else {
+        totals.spoiledCount += 1;
+      }
+    } else if (c.Status === STATUS.DECISION.PENDING) {
+      totals.pendingCount += 1;
+    } else {
+      totals.notApprovedCount += 1;
+    }
+    return {
+      cancellationId: c.CancellationId,
+      requestedAt: c.CreatedAt,
+      bookNo: c.BookNo,
+      receiptNo: c.ReceiptNo,
+      cancelType: c.CancelType,
+      cancelTypeLabel: STATUS_LABELS.CANCEL_TYPE[c.CancelType] || c.CancelType,
+      receiptDate: p ? p.PaymentDate : (e ? e.ReceiptDate : ''),
+      studentNo: s ? s.StudentNo : '',
+      studentName: studentNameOf_(s),
+      amountSatang: amount,
+      reason: c.Reason,
+      requestedBy: displayNameOf_(c.CreatedBy, names),
+      status: c.Status,
+      statusLabel: STATUS_LABELS.DECISION[c.Status] || c.Status,
+      decidedBy: displayNameOf_(c.DecidedBy, names),
+      decidedAt: c.DecidedAt,
+      decisionNote: c.DecisionNote,
+    };
+  }).sort(function (a, b) {
+    return compareText_(a.bookNo, b.bookNo) || a.receiptNo - b.receiptNo || (a.requestedAt < b.requestedAt ? -1 : 1);
+  });
+  return { period: period, rows: rows, totals: totals, meta: reportMeta_(ctx) };
+}
+
+// ---------------------------------------------------------------------------
+// 8. รายงานสรุปประจำปีการศึกษา
+// ---------------------------------------------------------------------------
+
+function emptyBilling_(base) {
+  return Object.assign(base || {}, {
+    count: 0, studentSet: Object.create(null),
+    grossSatang: 0, adjustSatang: 0, netSatang: 0, paidSatang: 0, outstandingSatang: 0, overdueSatang: 0,
+  });
+}
+
+function addBilling_(t, asm, f, today) {
+  t.count += 1;
+  t.studentSet[asm.StudentId] = true;
+  t.grossSatang += f.grossSatang;
+  t.adjustSatang += f.adjustSatang;
+  t.netSatang += f.netSatang;
+  t.paidSatang += f.paidSatang;
+  t.outstandingSatang += f.outstandingSatang;
+  if (f.outstandingSatang > 0 && asm.DueDate && asm.DueDate < today) t.overdueSatang += f.outstandingSatang;
+}
+
+function finishBilling_(t) {
+  t.students = Object.keys(t.studentSet).length;
+  delete t.studentSet;
+  return t;
+}
+
+/** reports.annual — สรุปการเรียกเก็บ การลดหย่อน การรับเงิน ยอดค้าง และการใช้ใบเสร็จของปีการศึกษา payload: { year } */
+function reportsAnnual_(ctx, payload) {
+  const year = isBlankInput_(payload.year) ? currentAcademicYear_() : requireAcademicYear_(payload.year);
+  const range = academicYearRange_(year);
+  const lc = ledgerContext_();
+  const levels = gradeLevels_();
+  const asmById = Object.create(null);
+  const overall = emptyBilling_();
+  const cancelled = { count: 0, grossSatang: 0 };
+  const grades = Object.create(null);
+  const items = Object.create(null);
+  let priorOutstanding = 0;
+  dbAll_(SHEETS.FEE_ASSESSMENTS).forEach(function (a) {
+    asmById[a.AssessmentId] = a;
+    if (a.AcademicYear !== year) {
+      if (a.AcademicYear < year && a.Status === STATUS.ASSESSMENT.ACTIVE) priorOutstanding += assessmentFigures_(a, lc).outstandingSatang;
+      return;
+    }
+    if (a.Status !== STATUS.ASSESSMENT.ACTIVE) {
+      cancelled.count += 1;
+      cancelled.grossSatang += satangOf_(a.GrossAmount);
+      return;
+    }
+    const f = assessmentFigures_(a, lc);
+    addBilling_(overall, a, f, lc.today);
+    const g = grades[a.GradeLevel] || (grades[a.GradeLevel] = emptyBilling_({ gradeLevel: a.GradeLevel }));
+    addBilling_(g, a, f, lc.today);
+    const fee = lc.fees[a.FeeSettingId];
+    const desc = (fee && fee.Description) || FEE_DEFAULT_DESCRIPTION;
+    const ik = desc + '|' + a.Term;
+    const it = items[ik] || (items[ik] = emptyBilling_({ description: desc, term: a.Term, label: desc + ' ' + termLabel_(a.Term, year) }));
+    addBilling_(it, a, f, lc.today);
+  });
+  const adjustments = { DISCOUNT: { count: 0, satang: 0 }, EXEMPTION: { count: 0, satang: 0 } };
+  lc.adjustments.forEach(function (ad) {
+    const a = asmById[ad.AssessmentId];
+    if (ad.Status !== STATUS.ADJUSTMENT.ACTIVE || !a || a.AcademicYear !== year || a.Status !== STATUS.ASSESSMENT.ACTIVE) return;
+    const t = adjustments[ad.Type];
+    if (!t) return;
+    t.count += 1;
+    t.satang += satangOf_(ad.Amount);
+  });
+
+  // เงินที่รับในช่วงปีการศึกษา (ตามวันที่รับเงิน) แยกเดือน และแยกว่าเป็นเงินของปีใด
+  const months = [];
+  for (let d = range.from; d <= range.to; d = addDaysIso_(d.slice(0, 7) + '-28', 7).slice(0, 7) + '-01') {
+    months.push({ month: d.slice(0, 7), label: formatThaiMonth_(d.slice(0, 7)), count: 0, satang: 0 });
+  }
+  const monthIdx = Object.create(null);
+  months.forEach(function (m, i) { monthIdx[m.month] = i; });
+  const payIds = Object.create(null);
+  const books = Object.create(null);
+  const cash = { count: 0, satang: 0, thisYearSatang: 0, priorSatang: 0, laterSatang: 0, voidedCount: 0 };
+  dbAll_(SHEETS.PAYMENTS).forEach(function (p) {
+    if (p.PaymentDate < range.from || p.PaymentDate > range.to) return;
+    if (p.Status === STATUS.PAYMENT.VOIDED) { cash.voidedCount += 1; return; }
+    if (p.Status !== STATUS.PAYMENT.ACTIVE) return;
+    const satang = satangOf_(p.Amount);
+    payIds[p.PaymentId] = true;
+    books[p.ReceiptBookNo] = true;
+    cash.count += 1;
+    cash.satang += satang;
+    const m = months[monthIdx[p.PaymentDate.slice(0, 7)]];
+    if (m) { m.count += 1; m.satang += satang; }
+  });
+  lc.allocations.forEach(function (al) {
+    if (al.Status !== STATUS.ALLOCATION.ACTIVE || !payIds[al.PaymentId]) return;
+    const a = asmById[al.AssessmentId];
+    const y = a ? a.AcademicYear : al.AcademicYear;
+    const satang = satangOf_(al.Amount);
+    if (y === year) cash.thisYearSatang += satang;
+    else if (y < year) cash.priorSatang += satang;
+    else cash.laterSatang += satang;
+  });
+  const spoiled = dbFind_(SHEETS.RECEIPT_CANCELLATIONS, function (c) {
+    const d = String(c.CreatedAt).slice(0, 10);
+    return c.CancelType === STATUS.CANCEL_TYPE.SPOILED && c.Status === STATUS.DECISION.APPROVED && d >= range.from && d <= range.to;
+  }).length;
+  const byGrade = gradeOrder_(levels);
+  return {
+    year: year,
+    period: { from: range.from, to: range.to, label: 'ปีการศึกษา ' + year, rangeLabel: formatThaiDate_(range.from) + ' – ' + formatThaiDate_(range.to) },
+    today: lc.today,
+    overall: finishBilling_(overall),
+    cancelled: cancelled,
+    adjustments: adjustments,
+    grades: Object.keys(grades).sort(byGrade).map(function (k) { return finishBilling_(grades[k]); }),
+    items: Object.keys(items).map(function (k) { return finishBilling_(items[k]); })
+      .sort(function (a, b) { return (TERM_ORDER_[a.term] || 0) - (TERM_ORDER_[b.term] || 0) || compareText_(a.description, b.description); }),
+    months: months,
+    cash: cash,
+    receipts: { used: cash.count, voided: cash.voidedCount, spoiled: spoiled, books: Object.keys(books).sort(compareText_) },
+    priorOutstandingSatang: priorOutstanding,
+    meta: reportMeta_(ctx),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 9. รายงานการใช้ใบเสร็จประจำปีงบประมาณ (D-15)
+// ---------------------------------------------------------------------------
+
+/**
+ * reports.receiptUsage — ต่อเล่ม: ยกมา รับเข้า ใช้ ยกเลิก รออนุมัติ ปิดเล่มโดยไม่ใช้ และคงเหลือ ณ สิ้นปีงบประมาณ
+ * วันที่ของเลขที่แต่ละใบใช้วันที่ในใบเสร็จ (เลขที่ยกเลิกก่อนบันทึกรับเงินใช้วันที่ยื่นคำขอ)
+ */
+function reportsReceiptUsage_(ctx, payload) {
+  const fy = isBlankInput_(payload.fiscalYear) ? fiscalYearOfDate_(todayIso_()) : requireInt_(payload.fiscalYear, 'ปีงบประมาณ', { min: 2500, max: 2700 });
+  const range = fiscalYearRange_(fy);
+  const byBook = receiptEntriesByBook_();
+  const rows = [];
+  const total = { broughtForward: 0, received: 0, used: 0, cancelled: 0, pending: 0, closedUnused: 0, remaining: 0 };
+  dbAll_(SHEETS.RECEIPT_BOOKS).forEach(function (b) {
+    const received = b.ReceivedDate || String(b.CreatedAt).slice(0, 10);
+    if (received > range.to) return;
+    const entries = (byBook[b.BookId] || []).filter(function (e) { return e.Status !== STATUS.RECEIPT_ENTRY.RELEASED; });
+    const usage = bookUsage_(b, entries);
+    const dateOf = function (e) { return e.ReceiptDate || String(e.CreatedAt).slice(0, 10); };
+    const before = entries.filter(function (e) { return dateOf(e) < range.from; }).length;
+    const inFy = entries.filter(function (e) { const d = dateOf(e); return d >= range.from && d <= range.to; });
+    const closed = b.Status === STATUS.BOOK.CLOSED && b.ClosedDate;
+    const closedBefore = closed && b.ClosedDate < range.from ? usage.closedUnused : 0;
+    const closedInFy = closed && b.ClosedDate >= range.from && b.ClosedDate <= range.to ? usage.closedUnused : 0;
+    const row = {
+      bookId: b.BookId,
+      bookNo: b.BookNo,
+      startNo: b.StartNo,
+      endNo: b.EndNo,
+      receivedDate: received,
+      status: b.Status,
+      statusLabel: STATUS_LABELS.BOOK[b.Status] || b.Status,
+      broughtForward: received < range.from ? usage.total - before - closedBefore : 0,
+      received: received >= range.from ? usage.total : 0,
+      used: inFy.filter(function (e) { return e.Status === STATUS.RECEIPT_ENTRY.USED; }).length,
+      cancelled: inFy.filter(function (e) { return e.Status === STATUS.RECEIPT_ENTRY.CANCELLED; }).length,
+      pending: inFy.filter(function (e) { return e.Status === STATUS.RECEIPT_ENTRY.CANCEL_PENDING; }).length,
+      closedUnused: closedInFy,
+      usedFrom: null,
+      usedTo: null,
+    };
+    if (row.broughtForward + row.received === 0) return; // ใช้หมดหรือปิดก่อนปีนี้ ไม่เกี่ยวกับปีงบประมาณนี้
+    inFy.forEach(function (e) {
+      row.usedFrom = row.usedFrom === null ? e.ReceiptNo : Math.min(row.usedFrom, e.ReceiptNo);
+      row.usedTo = row.usedTo === null ? e.ReceiptNo : Math.max(row.usedTo, e.ReceiptNo);
+    });
+    row.remaining = row.broughtForward + row.received - row.used - row.cancelled - row.pending - row.closedUnused;
+    Object.keys(total).forEach(function (k) { total[k] += row[k]; });
+    rows.push(row);
+  });
+  rows.sort(function (a, b) { return compareText_(a.receivedDate, b.receivedDate) || compareText_(a.bookNo, b.bookNo); });
+  return {
+    fiscalYear: fy,
+    period: { from: range.from, to: range.to, label: 'ปีงบประมาณ ' + fy, rangeLabel: formatThaiDate_(range.from) + ' – ' + formatThaiDate_(range.to) },
+    asOf: todayIso_() < range.to ? todayIso_() : range.to,
+    rows: rows,
+    total: total,
+    meta: reportMeta_(ctx),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// 1. เอกสารแจ้งยอดเรียกเก็บเงิน (D-21)
+// ---------------------------------------------------------------------------
+
+/**
+ * reports.notices — หนังสือแจ้งยอดถึงผู้ปกครอง เฉพาะนักเรียนที่มียอดค้าง (รวมยอดค้างจากปีก่อน)
+ * payload: { year, gradeLevel, room, studentId } (ไม่นับนักเรียนที่ย้ายออกแล้ว)
+ */
+function reportsNotices_(ctx, payload) {
+  const year = isBlankInput_(payload.year) ? currentAcademicYear_() : requireAcademicYear_(payload.year);
+  const gradeLevel = requireText_(payload.gradeLevel, 'ระดับชั้น', { optional: true, max: 50 });
+  const room = requireText_(payload.room, 'ห้อง', { optional: true, max: 20 });
+  const studentId = isBlankInput_(payload.studentId) ? '' : requireId_(payload.studentId, 'STU', 'รหัสนักเรียน');
+  const lc = ledgerContext_();
+  const levels = gradeLevels_();
+  const students = studentsById_();
+  const enrolls = dbFind_(SHEETS.ENROLLMENTS, function (e) {
+    return e.AcademicYear === year && e.EnrollStatus !== STATUS.STUDENT.TRANSFERRED &&
+      (!gradeLevel || e.GradeLevel === gradeLevel) && (!room || e.Room === room) && (!studentId || e.StudentId === studentId);
+  });
+  const wanted = Object.create(null);
+  enrolls.forEach(function (e) { wanted[e.StudentId] = e; });
+  const items = Object.create(null);
+  dbAll_(SHEETS.FEE_ASSESSMENTS).forEach(function (a) {
+    if (!wanted[a.StudentId] || a.Status !== STATUS.ASSESSMENT.ACTIVE) return;
+    const dto = assessmentDto_(a, lc);
+    if (dto.outstandingSatang <= 0) return;
+    (items[a.StudentId] || (items[a.StudentId] = [])).push(dto);
+  });
+  const notices = enrolls.filter(function (e) { return items[e.StudentId]; }).map(function (e) {
+    const s = students[e.StudentId];
+    const list = items[e.StudentId].sort(function (a, b) { return a.year - b.year || compareForStatement_(a, b); });
+    return {
+      studentId: e.StudentId,
+      studentNo: s ? s.StudentNo : '',
+      fullName: studentNameOf_(s),
+      firstName: s ? s.FirstName : '',
+      gradeLevel: e.GradeLevel,
+      room: e.Room,
+      classNo: e.ClassNo,
+      classLabel: classLabel_(e.GradeLevel, e.Room),
+      items: list.map(function (d) {
+        return {
+          label: d.label, year: d.year, dueDate: d.dueDate,
+          netSatang: d.netSatang, paidSatang: d.paidSatang, outstandingSatang: d.outstandingSatang, overdue: d.overdue,
+        };
+      }),
+      totalSatang: list.reduce(function (sum, d) { return sum + d.outstandingSatang; }, 0),
+    };
+  }).sort(compareStudentRows_(levels));
+  if (notices.length > NOTICE_MAX_STUDENTS) {
+    throw validationError_('มีนักเรียนที่ต้องแจ้งยอด ' + notices.length + ' คน มากเกินกว่าจะพิมพ์ครั้งเดียว กรุณาเลือกระดับชั้น');
+  }
+  notices.forEach(function (n) { n.totalText = bahtText_(n.totalSatang); });
+  return {
+    year: year,
+    issueDate: todayIso_(),
+    filter: { gradeLevel: gradeLevel, room: room, studentId: studentId },
+    notices: notices,
+    totalSatang: notices.reduce(function (sum, n) { return sum + n.totalSatang; }, 0),
+    meta: reportMeta_(ctx),
+  };
+}
+
+// ============================================================================
+// ไฟล์ต้นฉบับ: src/Dashboard.js
+// ============================================================================
+
+/**
+ * ============================================================================
+ *  Dashboard.gs — ภาพรวมการเงินของปีการศึกษา (ข้อกำหนดข้อ 10)
+ * ----------------------------------------------------------------------------
+ *  - นักเรียนที่นับ = นักเรียนที่มีชั้นเรียนในปีนั้น และนักเรียนที่มีรายการเรียกเก็บของปีนั้นแต่ไม่มีชั้นเรียน (กลุ่ม "อื่น ๆ")
+ *  - สถานะรายนักเรียน (รวมทุกรายการของปีนั้น):
+ *      ชำระครบ = ไม่มียอดค้างและยอดสุทธิมากกว่า 0 / ได้รับยกเว้น = ยอดสุทธิเป็น 0 ทั้งหมด
+ *      ชำระบางส่วน = มียอดค้างและเคยชำระแล้ว / ยังไม่ชำระ = มียอดค้างและยังไม่ชำระเลย
+ *      ยังไม่มีรายการ = ยังไม่ได้ออกรายการเรียกเก็บ
+ *  - ยอดเงินเป็นยอด ณ ขณะที่เปิดหน้า คำนวณจาก Ledger ทุกครั้ง (ตรงกับรายงานยอดค้าง)
+ * ============================================================================
+ */
+
+const DASHBOARD_STATES = Object.freeze(['PAID', 'PARTIAL', 'UNPAID', 'EXEMPT', 'NO_BILL']);
+const DASHBOARD_STATE_LABELS = Object.freeze({
+  PAID: 'ชำระครบ', PARTIAL: 'ชำระบางส่วน', UNPAID: 'ยังไม่ชำระ', EXEMPT: 'ได้รับยกเว้น', NO_BILL: 'ยังไม่มีรายการเรียกเก็บ',
+});
+const DASHBOARD_OTHER_KEY = '__OTHER__';
+
+function emptyDashboardGroup_(base) {
+  const g = Object.assign(base || {}, {
+    students: 0, grossSatang: 0, netSatang: 0, paidSatang: 0, outstandingSatang: 0, overdueSatang: 0, states: {},
+  });
+  DASHBOARD_STATES.forEach(function (s) { g.states[s] = 0; });
+  return g;
+}
+
+function addDashboardStudent_(g, r, state) {
+  g.students += 1;
+  g.states[state] += 1;
+  if (!r) return;
+  g.grossSatang += r.gross;
+  g.netSatang += r.net;
+  g.paidSatang += r.paid;
+  g.outstandingSatang += r.outstanding;
+  g.overdueSatang += r.overdue;
+}
+
+function dashboardStateOf_(r) {
+  if (!r || !r.count) return 'NO_BILL';
+  if (r.outstanding <= 0) return r.net > 0 ? 'PAID' : 'EXEMPT';
+  return r.paid > 0 ? 'PARTIAL' : 'UNPAID';
+}
+
+/** dashboard.summary — payload: { year } (ค่าเริ่มต้น = ปีการศึกษาปัจจุบัน) */
+function dashboardSummary_(ctx, payload) {
+  const year = isBlankInput_(payload.year) ? currentAcademicYear_() : requireAcademicYear_(payload.year);
+  const lc = ledgerContext_();
+  const levels = gradeLevels_();
+  const enrollments = Object.create(null);
+  dbFind_(SHEETS.ENROLLMENTS, function (e) { return e.AcademicYear === year; }).forEach(function (e) { enrollments[e.StudentId] = e; });
+
+  const per = Object.create(null);
+  let priorOutstanding = 0;
+  const priorStudents = Object.create(null);
+  dbAll_(SHEETS.FEE_ASSESSMENTS).forEach(function (a) {
+    if (a.Status !== STATUS.ASSESSMENT.ACTIVE) return;
+    if (a.AcademicYear > year) return;
+    const f = assessmentFigures_(a, lc);
+    if (a.AcademicYear < year) {
+      priorOutstanding += f.outstandingSatang;
+      if (f.outstandingSatang > 0) priorStudents[a.StudentId] = true;
+      return;
+    }
+    const r = per[a.StudentId] || (per[a.StudentId] = { count: 0, gross: 0, net: 0, paid: 0, outstanding: 0, overdue: 0 });
+    r.count += 1;
+    r.gross += f.grossSatang;
+    r.net += f.netSatang;
+    r.paid += f.paidSatang;
+    r.outstanding += f.outstandingSatang;
+    if (f.outstandingSatang > 0 && a.DueDate && a.DueDate < lc.today) r.overdue += f.outstandingSatang;
+  });
+
+  const totals = emptyDashboardGroup_();
+  const grades = Object.create(null);
+  const population = Object.create(null);
+  Object.keys(enrollments).forEach(function (id) { population[id] = true; });
+  Object.keys(per).forEach(function (id) { population[id] = true; });
+  Object.keys(population).forEach(function (id) {
+    const r = per[id] || null;
+    const state = dashboardStateOf_(r);
+    const e = enrollments[id];
+    addDashboardStudent_(totals, r, state);
+    const gk = e ? e.GradeLevel : DASHBOARD_OTHER_KEY;
+    const g = grades[gk] || (grades[gk] = emptyDashboardGroup_({
+      gradeLevel: e ? e.GradeLevel : '', label: e ? e.GradeLevel : 'ไม่มีชั้นเรียนในปีนี้', other: !e, rooms: Object.create(null),
+    }));
+    addDashboardStudent_(g, r, state);
+    if (!e) return;
+    const room = g.rooms[e.Room] || (g.rooms[e.Room] = emptyDashboardGroup_({ room: e.Room, label: classLabel_(e.GradeLevel, e.Room) }));
+    addDashboardStudent_(room, r, state);
+  });
+  const byGrade = gradeOrder_(levels);
+  const gradeList = Object.keys(grades).sort(function (a, b) {
+    if (a === DASHBOARD_OTHER_KEY) return 1;
+    if (b === DASHBOARD_OTHER_KEY) return -1;
+    return byGrade(a, b);
+  }).map(function (k) {
+    const g = grades[k];
+    g.rooms = Object.keys(g.rooms).sort(compareRoom_).map(function (r) { return g.rooms[r]; });
+    return g;
+  });
+
+  const today = lc.today;
+  const todayFig = dayFigures_(today);
+  return {
+    year: year,
+    today: today,
+    generatedAt: nowIso_(),
+    totals: totals,
+    grades: gradeList,
+    states: DASHBOARD_STATES.map(function (s) { return { key: s, label: DASHBOARD_STATE_LABELS[s] }; }),
+    priorOutstandingSatang: priorOutstanding,
+    priorStudents: Object.keys(priorStudents).length,
+    todayReceipts: { date: today, count: todayFig.receiptCount, totalSatang: todayFig.totalSatang, closed: !!closingOf_(today) },
+    pendingApprovals: dbFind_(SHEETS.APPROVAL_REQUESTS, function (r) { return r.Status === STATUS.DECISION.PENDING; }).length,
+    unclosedDays: unclosedDaysCount_(),
+  };
+}
+
+// ============================================================================
+// ไฟล์ต้นฉบับ: src/Backup.js
+// ============================================================================
+
+/**
+ * ============================================================================
+ *  Backup.gs — สำรองและกู้คืนข้อมูล (ข้อกำหนดข้อ 12, D-40 ถึง D-42)
+ * ----------------------------------------------------------------------------
+ *  ไฟล์สำรอง
+ *  - เป็น Google Sheets ไฟล์ใหม่ในโฟลเดอร์ "สำรองข้อมูล ระบบเงินบำรุงการศึกษา" ใน Drive ของบัญชีเจ้าของระบบ
+ *  - คัดลอกทุกชีตของฐานข้อมูล (ค่าและรูปแบบเซลล์) + ชีต "_ข้อมูลไฟล์สำรอง"
+ *    ไม่มีสคริปต์และค่าลับใน Script Properties ติดไปด้วย
+ *  - สำรองภายใต้ lock เดียวกับการบันทึก ทุกชีตในไฟล์จึงเป็นข้อมูล ณ เวลาเดียวกัน
+ *  - อัตโนมัติ: ตัวตั้งเวลารายวัน (เปิด/ปิด/เปลี่ยนเวลาได้ในหน้าเว็บ) เก็บไฟล์อัตโนมัติ BACKUP_RETENTION ไฟล์ล่าสุด
+ *    และไฟล์อัตโนมัติไฟล์แรกของทุกเดือน ไฟล์อัตโนมัติอื่นย้ายไปถังขยะของ Drive (กู้คืนจากถังขยะได้ภายใน 30 วัน)
+ *    ไฟล์ที่สำรองเองและไฟล์ "ก่อนกู้คืน" ไม่ถูกลบอัตโนมัติ
+ *
+ *  การกู้คืน (ผู้ดูแลระบบ ต้องพิมพ์คำยืนยัน)
+ *  1) อ่านและตรวจข้อมูลทุกชีตในไฟล์สำรองก่อน ถ้าพบปัญหาจะไม่แตะข้อมูลจริงเลย
+ *  2) สำรองข้อมูลปัจจุบันเป็นไฟล์ "ก่อนกู้คืน" ภายใต้ lock เดียวกัน (ย้อนการกู้คืนได้)
+ *  3) เขียนข้อมูลจากไฟล์สำรองทับในไฟล์ฐานข้อมูลเดิม (ไม่สลับไฟล์ ไม่แก้ DB_SPREADSHEET_ID)
+ *     ยกเว้น Users (บัญชีและรหัสผ่านปัจจุบัน ผู้ที่ถูกปิดบัญชีแล้วไม่กลับมาใช้ได้)
+ *     และ AuditLogs (ประวัติต่อเนื่อง ไม่ย้อนกลับ ลูกโซ่ hash ไม่ขาด)
+ *  4) บันทึกประวัติ RESTORE และให้ทุกคนเข้าสู่ระบบใหม่
+ * ============================================================================
+ */
+
+const BACKUP_FOLDER_NAME = 'สำรองข้อมูล ระบบเงินบำรุงการศึกษา';
+const BACKUP_INFO_SHEET = '_ข้อมูลไฟล์สำรอง';
+const BACKUP_APP_TAG = 'school-fee-backup';
+const BACKUP_HANDLER = 'dailyBackup';
+const BACKUP_DEFAULT_HOUR = 18;
+const BACKUP_KINDS = Object.freeze({ MANUAL: 'MANUAL', AUTO: 'AUTO', PRE_RESTORE: 'PRE_RESTORE', OTHER: 'OTHER' });
+const BACKUP_KIND_LABELS = Object.freeze({ MANUAL: 'สำรองเอง', AUTO: 'อัตโนมัติ', PRE_RESTORE: 'ก่อนกู้คืน', OTHER: 'ไฟล์อื่นในโฟลเดอร์' });
+const RESTORE_CONFIRM_TEXT = 'กู้คืนข้อมูล';
+const BACKUP_SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
+
+/** ชีตที่ไม่กู้คืน (คงข้อมูลปัจจุบันไว้) */
+function restoreExcludedSheets_() {
+  return [SHEETS.USERS, SHEETS.AUDIT_LOGS];
+}
+
+function restoreSheetNames_() {
+  const excluded = restoreExcludedSheets_();
+  return SHEET_ORDER.filter(function (n) { return excluded.indexOf(n) === -1; });
+}
+
+function backupHourLabel_(hour) {
+  const h = Number(hour);
+  return ('0' + h).slice(-2) + ':00–' + ('0' + ((h + 1) % 24)).slice(-2) + ':00 น.';
+}
+
+function safeParseJson_(text, fallback) {
+  try {
+    const v = JSON.parse(text);
+    return v && typeof v === 'object' ? v : fallback;
+  } catch (e) {
+    return fallback;
+  }
+}
+
+/** แปลงข้อผิดพลาดจาก Drive/ScriptApp เป็นข้อความภาษาไทย (รายละเอียดเขียนลง Log โดยไม่มีค่าลับ) */
+function driveError_(e, what) {
+  if (isAppError_(e)) return e;
+  const text = e && e.message ? String(e.message) : String(e);
+  console.error(what + ' ไม่สำเร็จ: ' + text.slice(0, 300));
+  if (/permission|authorization|สิทธิ์|Required permissions/i.test(text)) {
+    return appError_(ERROR_CODES.INTERNAL, what + 'ไม่สำเร็จ เพราะระบบยังไม่ได้รับอนุญาตให้ใช้ Google Drive ' +
+      'กรุณาให้เจ้าของระบบเปิด Apps Script แล้วกด Run ฟังก์ชัน SetupDatabase อีกครั้งเพื่อกดอนุญาตสิทธิ์ (ดูคู่มือติดตั้ง หัวข้อระยะที่ 7)');
+  }
+  return appError_(ERROR_CODES.INTERNAL, what + 'ไม่สำเร็จ (ติดต่อ Google Drive ไม่ได้ชั่วคราว) กรุณาลองใหม่อีกครั้ง');
+}
+
+// ---------------------------------------------------------------------------
+// โฟลเดอร์และรายการไฟล์สำรอง
+// ---------------------------------------------------------------------------
+
+/** โฟลเดอร์สำรองที่มีอยู่ (ไม่สร้างใหม่) */
+function existingBackupFolder_() {
+  const id = PropertiesService.getScriptProperties().getProperty(PROP_KEYS.BACKUP_FOLDER_ID);
+  if (!id) return null;
+  try {
+    const folder = DriveApp.getFolderById(id);
+    return folder.isTrashed() ? null : folder;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** โฟลเดอร์สำรอง (สร้างใหม่ถ้ายังไม่มี หรือถูกลบไปแล้ว) */
+function backupFolder_() {
+  const existing = existingBackupFolder_();
+  if (existing) return existing;
+  const folder = DriveApp.createFolder(BACKUP_FOLDER_NAME);
+  folder.setDescription('ไฟล์สำรองข้อมูลของระบบบริหารจัดเก็บเงินบำรุงการศึกษา ห้ามแชร์โฟลเดอร์นี้ให้ผู้อื่น');
+  PropertiesService.getScriptProperties().setProperty(PROP_KEYS.BACKUP_FOLDER_ID, folder.getId());
+  return folder;
+}
+
+/** ชื่อไฟล์ เช่น สำรองข้อมูล_2569-11-22_1805_อัตโนมัติ */
+function backupFileName_(createdAt, kind) {
+  const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})/.exec(createdAt);
+  const stamp = m ? (Number(m[1]) + 543) + '-' + m[2] + '-' + m[3] + '_' + m[4] + m[5] : createdAt;
+  return 'สำรองข้อมูล_' + stamp + '_' + (BACKUP_KIND_LABELS[kind] || kind);
+}
+
+function backupMetaOf_(file) {
+  const meta = safeParseJson_(file.getDescription ? file.getDescription() || '' : '', null);
+  if (meta && meta.app === BACKUP_APP_TAG && BACKUP_KINDS[meta.kind]) return meta;
+  return {
+    app: '',
+    kind: BACKUP_KINDS.OTHER,
+    createdAt: dateToIsoDateTime_(file.getDateCreated()),
+    createdBy: '',
+    version: '',
+    rows: null,
+  };
+}
+
+function backupDto_(file, meta, names) {
+  let rows = null;
+  if (meta.rows && typeof meta.rows === 'object') {
+    rows = Object.keys(meta.rows).reduce(function (sum, k) { return sum + (Number(meta.rows[k]) || 0); }, 0);
+  }
+  return {
+    fileId: file.getId(),
+    name: file.getName(),
+    url: file.getUrl(),
+    kind: meta.kind,
+    kindLabel: BACKUP_KIND_LABELS[meta.kind] || meta.kind,
+    createdAt: meta.createdAt,
+    createdBy: meta.createdBy ? displayNameOf_(meta.createdBy, names || Object.create(null)) : '',
+    version: meta.version || '',
+    rows: rows,
+  };
+}
+
+/** ไฟล์สำรองทั้งหมดในโฟลเดอร์ (ข้ามไฟล์ในถังขยะและไฟล์ที่ไม่ใช่ Google Sheets) ล่าสุดก่อน */
+function listBackups_(folder, names) {
+  const out = [];
+  const it = folder.getFiles();
+  while (it.hasNext()) {
+    const f = it.next();
+    if (f.isTrashed() || f.getMimeType() !== BACKUP_SPREADSHEET_MIME) continue;
+    out.push(backupDto_(f, backupMetaOf_(f), names));
+  }
+  return out.sort(function (a, b) { return a.createdAt < b.createdAt ? 1 : (a.createdAt > b.createdAt ? -1 : 0); });
+}
+
+/** ไฟล์ที่จะใช้กู้คืนต้องอยู่ในโฟลเดอร์สำรองของระบบ ไม่อยู่ในถังขยะ และเป็น Google Sheets */
+function requireBackupFile_(fileId) {
+  const id = requireText_(fileId, 'ไฟล์สำรอง', { max: 200, pattern: /^[A-Za-z0-9_-]+$/, patternMessage: 'รหัสไฟล์สำรองไม่ถูกต้อง' });
+  const folder = existingBackupFolder_();
+  if (!folder) throw appError_(ERROR_CODES.NOT_FOUND, 'ยังไม่มีโฟลเดอร์สำรองข้อมูล');
+  let file;
+  try {
+    file = DriveApp.getFileById(id);
+  } catch (e) {
+    throw appError_(ERROR_CODES.NOT_FOUND, 'ไม่พบไฟล์สำรองนี้ (อาจถูกลบหรือย้ายไปแล้ว)');
+  }
+  let inFolder = false;
+  const parents = file.getParents();
+  while (parents.hasNext()) {
+    if (parents.next().getId() === folder.getId()) inFolder = true;
+  }
+  if (!inFolder || file.isTrashed() || file.getMimeType() !== BACKUP_SPREADSHEET_MIME) {
+    throw appError_(ERROR_CODES.FORBIDDEN, 'กู้คืนได้เฉพาะไฟล์ Google Sheets ที่อยู่ในโฟลเดอร์ "' + BACKUP_FOLDER_NAME + '" เท่านั้น');
+  }
+  return file;
+}
+
+// ---------------------------------------------------------------------------
+// สร้างไฟล์สำรอง
+// ---------------------------------------------------------------------------
+
+/** สำรองข้อมูลทั้งฐานข้อมูลเป็นไฟล์ใหม่ (ทำภายใต้ lock) คืนข้อมูลไฟล์สำรอง */
+function createBackup_(kind, actor) {
+  return withScriptLock_(function () {
+    const src = db_();
+    const createdAt = nowIso_();
+    const name = backupFileName_(createdAt, kind);
+    let folder;
+    let ss;
+    try {
+      folder = backupFolder_();
+      ss = SpreadsheetApp.create(name);
+    } catch (e) {
+      throw driveError_(e, 'สร้างไฟล์สำรอง');
+    }
+    const fileId = ss.getId();
+    try {
+      const initial = ss.getSheets();
+      const rows = {};
+      SHEET_ORDER.forEach(function (sheetName) {
+        const sheet = src.getSheetByName(sheetName);
+        if (!sheet) throw appError_(ERROR_CODES.INTERNAL, 'ไม่พบชีต "' + sheetName + '" ในฐานข้อมูล ' + SETUP_HINT_);
+        sheet.copyTo(ss).setName(sheetName);
+        rows[sheetName] = Math.max(sheet.getLastRow() - 1, 0);
+      });
+      const info = [
+        ['key', 'value', 'คำอธิบาย'],
+        ['app', BACKUP_APP_TAG, 'ไฟล์สำรองของ' + APP.NAME + ' ห้ามแก้ไขไฟล์นี้'],
+        ['kind', kind, BACKUP_KIND_LABELS[kind]],
+        ['createdAt', createdAt, 'วันเวลาที่สำรอง'],
+        ['createdBy', actor.username, 'ผู้สั่งสำรอง'],
+        ['version', APP.VERSION, 'รุ่นของระบบ'],
+        ['sourceId', src.getId(), 'รหัสไฟล์ฐานข้อมูลต้นฉบับ'],
+      ];
+      const infoSheet = ss.insertSheet(BACKUP_INFO_SHEET);
+      const range = infoSheet.getRange(1, 1, info.length, 3);
+      range.setNumberFormats(info.map(function () { return ['@', '@', '@']; }));
+      range.setValues(info);
+      initial.forEach(function (s) { ss.deleteSheet(s); });
+      const meta = {
+        app: BACKUP_APP_TAG, kind: kind, createdAt: createdAt, createdBy: actor.username,
+        version: APP.VERSION, sourceId: src.getId(), rows: rows,
+      };
+      const file = DriveApp.getFileById(fileId);
+      file.setDescription(JSON.stringify(meta));
+      file.moveTo(folder);
+      const total = Object.keys(rows).reduce(function (sum, k) { return sum + rows[k]; }, 0);
+      auditAppend_([{
+        action: AUDIT_ACTIONS.BACKUP,
+        entity: 'Backup',
+        entityId: fileId,
+        after: { name: name, kind: kind, rows: rows },
+        note: 'สำรองข้อมูล (' + BACKUP_KIND_LABELS[kind] + ') ' + name + ' รวม ' + total + ' แถว',
+      }], actor);
+      PropertiesService.getScriptProperties().setProperty(PROP_KEYS.BACKUP_LAST, JSON.stringify({
+        fileId: fileId, name: name, kind: kind, createdAt: createdAt,
+      }));
+      return backupDto_(file, meta, userDisplayNames_());
+    } catch (e) {
+      // ไฟล์ที่ทำไม่เสร็จต้องไม่ถูกเลือกไปกู้คืน จึงย้ายไปถังขยะทันที
+      try { DriveApp.getFileById(fileId).setTrashed(true); } catch (ignore) { /* ไม่มีอะไรต้องทำเพิ่ม */ }
+      throw driveError_(e, 'สำรองข้อมูล');
+    }
+  }, LIMITS.SETUP_LOCK_TIMEOUT_MS);
+}
+
+/** ย้ายไฟล์สำรองอัตโนมัติที่เกินจำนวนไปถังขยะ (เก็บไฟล์แรกของทุกเดือนไว้เสมอ) คืนชื่อไฟล์ที่ย้าย */
+function applyBackupRetention_(actor) {
+  return withScriptLock_(function () {
+    const folder = existingBackupFolder_();
+    if (!folder) return [];
+    const keep = getSetting_('BACKUP_RETENTION');
+    const autos = listBackups_(folder).filter(function (b) { return b.kind === BACKUP_KINDS.AUTO; });
+    const firstOfMonth = Object.create(null);
+    autos.forEach(function (b) {
+      const m = b.createdAt.slice(0, 7);
+      if (!firstOfMonth[m] || b.createdAt < firstOfMonth[m].createdAt) firstOfMonth[m] = b;
+    });
+    const trashed = [];
+    autos.forEach(function (b, i) {
+      if (i < keep || firstOfMonth[b.createdAt.slice(0, 7)] === b) return;
+      DriveApp.getFileById(b.fileId).setTrashed(true);
+      trashed.push(b.name);
+    });
+    if (trashed.length) {
+      auditAppend_([{
+        action: AUDIT_ACTIONS.BACKUP_CLEANUP,
+        entity: 'Backup',
+        after: { files: trashed },
+        note: 'ย้ายไฟล์สำรองอัตโนมัติที่เกิน ' + keep + ' ไฟล์ไปถังขยะของ Google Drive ' + trashed.length + ' ไฟล์ (กู้คืนจากถังขยะได้ภายใน 30 วัน)',
+      }], actor);
+    }
+    return trashed;
+  }, LIMITS.SETUP_LOCK_TIMEOUT_MS);
+}
+
+// ---------------------------------------------------------------------------
+// ตั้งเวลาสำรองอัตโนมัติ
+// ---------------------------------------------------------------------------
+
+function backupSchedule_() {
+  return safeParseJson_(PropertiesService.getScriptProperties().getProperty(PROP_KEYS.BACKUP_SCHEDULE) || '', {});
+}
+
+function backupScheduleStatus_() {
+  const s = backupSchedule_();
+  let triggerFound = false;
+  try {
+    triggerFound = ScriptApp.getProjectTriggers().some(function (t) {
+      return t.getHandlerFunction() === BACKUP_HANDLER && (!s.triggerUid || String(t.getUniqueId()) === String(s.triggerUid));
+    });
+  } catch (e) {
+    triggerFound = false;
+  }
+  return {
+    configured: !!s.updatedAt,
+    enabled: !!s.enabled,
+    hour: s.enabled ? s.hour : null,
+    hourLabel: s.enabled ? backupHourLabel_(s.hour) : '',
+    triggerFound: triggerFound,
+    updatedAt: s.updatedAt || '',
+    updatedBy: s.updatedBy || '',
+  };
+}
+
+/** สร้างหรือลบตัวตั้งเวลา (ลบของเดิมทั้งหมดก่อนเสมอ ไม่ให้สำรองซ้ำหลายครั้งต่อวัน) */
+function applyBackupSchedule_(enabled, hour, actor) {
+  let uid = '';
+  try {
+    ScriptApp.getProjectTriggers().forEach(function (t) {
+      if (t.getHandlerFunction() === BACKUP_HANDLER) ScriptApp.deleteTrigger(t);
+    });
+    if (enabled) {
+      uid = String(ScriptApp.newTrigger(BACKUP_HANDLER).timeBased().everyDays(1).atHour(hour).inTimezone(APP.TIMEZONE).create().getUniqueId());
+    }
+  } catch (e) {
+    throw driveError_(e, 'ตั้งเวลาสำรองข้อมูลอัตโนมัติ');
+  }
+  PropertiesService.getScriptProperties().setProperty(PROP_KEYS.BACKUP_SCHEDULE, JSON.stringify({
+    enabled: !!enabled, hour: enabled ? hour : null, triggerUid: uid, updatedAt: nowIso_(), updatedBy: actor.username,
+  }));
+  return backupScheduleStatus_();
+}
+
+/** ตอนติดตั้ง: เปิดการสำรองอัตโนมัติทุกวันให้ ถ้ายังไม่เคยตั้งค่า (ถ้าผู้ดูแลระบบปิดไว้ จะไม่เปิดให้อีก) */
+function ensureDefaultBackupSchedule_(report) {
+  if (PropertiesService.getScriptProperties().getProperty(PROP_KEYS.BACKUP_SCHEDULE)) return;
+  try {
+    applyBackupSchedule_(true, BACKUP_DEFAULT_HOUR, ACTORS.OWNER);
+    report.backupScheduleCreated = BACKUP_DEFAULT_HOUR;
+  } catch (e) {
+    report.warnings.push('ตั้งเวลาสำรองข้อมูลอัตโนมัติไม่สำเร็จ ผู้ดูแลระบบตั้งได้ภายหลังในหน้า "สำรองข้อมูล"');
+  }
+}
+
+/**
+ * ตัวตั้งเวลารายวันเรียกฟังก์ชันนี้ (ฟังก์ชันสาธารณะ จึงตรวจว่าเรียกจากตัวตั้งเวลาของระบบ หรือจากเจ้าของระบบเท่านั้น)
+ * ถ้าสำรองไม่สำเร็จ จะบันทึกผลไว้ให้ผู้ดูแลระบบเห็น แล้วแจ้งข้อผิดพลาดต่อ เพื่อให้ Google ส่งอีเมลแจ้งเจ้าของระบบ
+ */
+function dailyBackup(e) {
+  const schedule = backupSchedule_();
+  const fromTrigger = !!(e && e.triggerUid && schedule.triggerUid && String(e.triggerUid) === String(schedule.triggerUid));
+  if (!fromTrigger) assertOwnerContext_();
+  const result = { at: nowIso_(), ok: false };
+  try {
+    const backup = createBackup_(BACKUP_KINDS.AUTO, ACTORS.SYSTEM);
+    result.fileId = backup.fileId;
+    result.name = backup.name;
+    result.trashed = applyBackupRetention_(ACTORS.SYSTEM).length;
+    result.ok = true;
+  } catch (err) {
+    result.message = isAppError_(err) ? err.userMessage : 'สำรองข้อมูลไม่สำเร็จ';
+    PropertiesService.getScriptProperties().setProperty(PROP_KEYS.BACKUP_LAST_AUTO, JSON.stringify(result));
+    throw err;
+  }
+  PropertiesService.getScriptProperties().setProperty(PROP_KEYS.BACKUP_LAST_AUTO, JSON.stringify(result));
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// อ่านและตรวจไฟล์สำรอง
+// ---------------------------------------------------------------------------
+
+function readBackupInfo_(ss) {
+  const sheet = ss.getSheetByName(BACKUP_INFO_SHEET);
+  const out = {};
+  if (!sheet || sheet.getLastRow() < 2) return out;
+  sheet.getRange(2, 1, sheet.getLastRow() - 1, 2).getValues().forEach(function (r) {
+    const k = String(r[0] || '').trim();
+    if (k) out[k] = String(r[1] === null || r[1] === undefined ? '' : r[1]).trim();
+  });
+  return out;
+}
+
+/** อ่านข้อมูลทุกชีตที่จะกู้คืนจากไฟล์สำรอง พร้อมรายการปัญหา (ไม่แก้ไขอะไร) */
+function readBackupData_(file) {
+  let ss;
+  try {
+    ss = SpreadsheetApp.openById(file.getId());
+  } catch (e) {
+    throw driveError_(e, 'เปิดไฟล์สำรอง');
+  }
+  const info = readBackupInfo_(ss);
+  const tables = {};
+  const problems = [];
+  const warnings = [];
+  if (info.app !== BACKUP_APP_TAG) warnings.push('ไม่พบข้อมูลไฟล์สำรองของระบบในไฟล์นี้ (อาจไม่ได้สร้างจากระบบ) ระบบจะตรวจข้อมูลทุกชีตก่อนกู้คืน');
+  if (info.version && info.version !== APP.VERSION) {
+    warnings.push('ไฟล์สำรองนี้สร้างจากระบบรุ่น ' + info.version + ' (รุ่นปัจจุบัน ' + APP.VERSION + ') คอลัมน์ที่ไม่มีในไฟล์จะเป็นค่าว่าง');
+  }
+  restoreSheetNames_().forEach(function (name) {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) { problems.push('ไม่พบชีต "' + name + '" ในไฟล์สำรอง'); return; }
+    const schema = getSchema_(name);
+    const header = readHeader_(sheet);
+    const missing = missingColumns_(buildColumnIndex_(header, schema), schema);
+    if (missing.length) { problems.push('ชีต "' + name + '" ในไฟล์สำรองขาดคอลัมน์ ' + missing.join(', ')); return; }
+    try {
+      const t = readTable_(name, sheet);
+      if (t.duplicateIds.length) {
+        problems.push('ชีต "' + name + '" ในไฟล์สำรองมีรหัสซ้ำ: ' + t.duplicateIds.slice(0, 3).join(', '));
+        return;
+      }
+      tables[name] = t.rows.map(function (r) { return r.record; });
+    } catch (e) {
+      problems.push(isAppError_(e) ? e.userMessage : 'อ่านชีต "' + name + '" ในไฟล์สำรองไม่ได้');
+    }
+  });
+  return { info: info, tables: tables, problems: problems, warnings: warnings };
+}
+
+/**
+ * จำนวนรายการที่บันทึกหลังเวลาสำรอง แยกตามชีต (จากประวัติการใช้งาน ไม่แสดงรายละเอียดการเงิน)
+ * ใช้ตำแหน่งของประวัติ "สำรองข้อมูล" ของไฟล์นั้นเป็นจุดตัด (แม่นยำกว่าเวลา เพราะบันทึกภายใต้ lock เดียวกับการสำรอง)
+ * ถ้าไม่พบ (ไฟล์ที่ไม่ได้สร้างจากระบบ) ใช้เวลาที่สำรองแทน
+ */
+function changesSince_(fileId, createdAt) {
+  const counts = Object.create(null);
+  let total = 0;
+  // นับเฉพาะการเปลี่ยนข้อมูลที่จะหายไปเมื่อกู้คืน (ไม่นับการเข้าสู่ระบบ การสำรอง และบัญชีผู้ใช้ซึ่งไม่ถูกกู้คืน)
+  const skip = [AUDIT_ACTIONS.SETUP, AUDIT_ACTIONS.LOGIN, AUDIT_ACTIONS.LOGIN_FAILED, AUDIT_ACTIONS.LOGOUT,
+    AUDIT_ACTIONS.PASSWORD_CHANGE, AUDIT_ACTIONS.EXPORT, AUDIT_ACTIONS.BACKUP, AUDIT_ACTIONS.RESTORE,
+    AUDIT_ACTIONS.INTEGRITY_CHECK, AUDIT_ACTIONS.ACCESS_DENIED, AUDIT_ACTIONS.BACKUP_SCHEDULE, AUDIT_ACTIONS.BACKUP_CLEANUP];
+  const rows = dbAll_(SHEETS.AUDIT_LOGS);
+  let start = -1;
+  for (let i = rows.length - 1; i >= 0; i--) {
+    if (rows[i].Action === AUDIT_ACTIONS.BACKUP && rows[i].EntityId === fileId) { start = i; break; }
+  }
+  rows.forEach(function (r, i) {
+    if (start >= 0 ? i <= start : (!createdAt || r.Timestamp <= createdAt)) return;
+    if (skip.indexOf(r.Action) !== -1 || r.Entity === SHEETS.USERS || !SCHEMA[r.Entity]) return;
+    total += 1;
+    counts[r.Entity] = (counts[r.Entity] || 0) + 1;
+  });
+  return {
+    total: total,
+    items: Object.keys(counts).sort().map(function (k) {
+      return { entity: k, label: auditEntityLabel_(k), count: counts[k] };
+    }),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// API (ผู้ดูแลระบบเท่านั้น)
+// ---------------------------------------------------------------------------
+
+/** backups.status — สถานะโดยย่อสำหรับหน้าแรก (ไม่เปิด Drive) */
+function backupsStatus_() {
+  const props = PropertiesService.getScriptProperties();
+  return {
+    schedule: backupScheduleStatus_(),
+    last: safeParseJson_(props.getProperty(PROP_KEYS.BACKUP_LAST) || '', null),
+    lastAuto: safeParseJson_(props.getProperty(PROP_KEYS.BACKUP_LAST_AUTO) || '', null),
+    today: todayIso_(),
+  };
+}
+
+/** backups.list — รายการไฟล์สำรอง สถานะการตั้งเวลา และผลการสำรองอัตโนมัติครั้งล่าสุด */
+function backupsList_() {
+  const status = backupsStatus_();
+  let folder;
+  let backups = [];
+  try {
+    folder = existingBackupFolder_();
+    if (folder) backups = listBackups_(folder, userDisplayNames_());
+  } catch (e) {
+    throw driveError_(e, 'อ่านรายการไฟล์สำรอง');
+  }
+  return {
+    folder: folder ? { name: folder.getName(), url: folder.getUrl() } : null,
+    backups: backups,
+    schedule: status.schedule,
+    last: status.last,
+    lastAuto: status.lastAuto,
+    retention: getSetting_('BACKUP_RETENTION'),
+    confirmText: RESTORE_CONFIRM_TEXT,
+    excludedSheets: restoreExcludedSheets_().map(function (n) { return { name: n, label: SCHEMA[n].label }; }),
+  };
+}
+
+/** backups.create — สำรองข้อมูลตอนนี้ */
+function backupsCreate_(ctx) {
+  const backup = createBackup_(BACKUP_KINDS.MANUAL, actorFromCtx_(ctx));
+  return { backup: backup, message: 'สำรองข้อมูลเรียบร้อยแล้ว: ' + backup.name };
+}
+
+/** backups.setSchedule — เปิด/ปิดการสำรองอัตโนมัติ payload: { enabled, hour } */
+function backupsSetSchedule_(ctx, payload) {
+  const enabled = requireBool_(payload.enabled, 'การสำรองข้อมูลอัตโนมัติ');
+  const hour = enabled ? requireInt_(payload.hour, 'เวลาสำรองข้อมูล', { min: 0, max: 23 }) : null;
+  const actor = actorFromCtx_(ctx);
+  const before = backupScheduleStatus_();
+  const status = applyBackupSchedule_(enabled, hour, actor);
+  auditAppend_([{
+    action: AUDIT_ACTIONS.BACKUP_SCHEDULE,
+    entity: 'Backup',
+    before: { enabled: before.enabled, hour: before.hour },
+    after: { enabled: status.enabled, hour: status.hour },
+    note: enabled ? 'สำรองข้อมูลอัตโนมัติทุกวัน เวลาประมาณ ' + status.hourLabel : 'ปิดการสำรองข้อมูลอัตโนมัติ',
+  }], actor);
+  return {
+    schedule: status,
+    message: enabled ? 'ตั้งเวลาสำรองข้อมูลอัตโนมัติทุกวัน เวลาประมาณ ' + status.hourLabel + ' แล้ว' : 'ปิดการสำรองข้อมูลอัตโนมัติแล้ว',
+  };
+}
+
+/** backups.restorePreview — ตรวจไฟล์สำรองและแสดงผลกระทบก่อนกู้คืน (ยังไม่แก้ไขข้อมูล) payload: { fileId } */
+function backupsRestorePreview_(ctx, payload) {
+  const file = requireBackupFile_(payload.fileId);
+  const data = readBackupData_(file);
+  const meta = backupMetaOf_(file);
+  const createdAt = data.info.createdAt || meta.createdAt;
+  return {
+    backup: backupDto_(file, Object.assign({}, meta, { createdAt: createdAt }), userDisplayNames_()),
+    valid: data.problems.length === 0,
+    problems: data.problems,
+    warnings: data.warnings,
+    sheets: restoreSheetNames_().map(function (n) {
+      return { name: n, label: SCHEMA[n].label, backupRows: data.tables[n] ? data.tables[n].length : null, currentRows: dbAll_(n).length };
+    }),
+    excludedSheets: restoreExcludedSheets_().map(function (n) { return { name: n, label: SCHEMA[n].label }; }),
+    since: changesSince_(file.getId(), createdAt),
+    confirmText: RESTORE_CONFIRM_TEXT,
+  };
+}
+
+/**
+ * backups.restore — กู้คืนข้อมูลจากไฟล์สำรอง payload: { fileId, confirmText }
+ * ทำทั้งหมดภายใต้ lock เดียว: ตรวจไฟล์ → สำรอง "ก่อนกู้คืน" → เขียนทับ → บันทึกประวัติ → ให้ทุกคนเข้าสู่ระบบใหม่
+ */
+function backupsRestore_(ctx, payload) {
+  if (payload.confirmText !== RESTORE_CONFIRM_TEXT) {
+    throw validationError_('กรุณาพิมพ์คำว่า "' + RESTORE_CONFIRM_TEXT + '" ให้ตรงทุกตัวอักษรเพื่อยืนยัน');
+  }
+  const file = requireBackupFile_(payload.fileId);
+  const data = readBackupData_(file);
+  if (data.problems.length) {
+    throw appError_(ERROR_CODES.CONFLICT, 'กู้คืนไม่ได้ เพราะไฟล์สำรองนี้ไม่สมบูรณ์: ' + data.problems[0]);
+  }
+  const actor = actorFromCtx_(ctx);
+  const meta = backupMetaOf_(file);
+  const backupCreatedAt = data.info.createdAt || meta.createdAt;
+  const pre = createBackup_(BACKUP_KINDS.PRE_RESTORE, actor);
+  const restored = withScriptLock_(function () {
+    const ss = db_();
+    const out = {};
+    restoreSheetNames_().forEach(function (name) {
+      const schema = getSchema_(name);
+      const sheet = ss.getSheetByName(name);
+      if (!sheet) throw appError_(ERROR_CODES.INTERNAL, 'ไม่พบชีต "' + name + '" ในฐานข้อมูล ' + SETUP_HINT_);
+      const header = readHeader_(sheet);
+      const missing = missingColumns_(buildColumnIndex_(header, schema), schema);
+      if (missing.length) throw appError_(ERROR_CODES.INTERNAL, 'ชีต "' + name + '" ขาดคอลัมน์ ' + missing.join(', ') + ' ' + SETUP_HINT_);
+      const lastRow = sheet.getLastRow();
+      if (lastRow >= 2) sheet.getRange(2, 1, lastRow - 1, Math.max(sheet.getLastColumn(), header.length)).clearContent();
+      writeRecordsAt_(sheet, header, schema, data.tables[name], 2);
+      out[name] = data.tables[name].length;
+    });
+    dbClearCache_();
+    PropertiesService.getScriptProperties().setProperty(PROP_KEYS.SESSION_EPOCH, newId_('EPOCH'));
+    auditAppend_([{
+      action: AUDIT_ACTIONS.RESTORE,
+      entity: 'Backup',
+      entityId: file.getId(),
+      after: { backupName: file.getName(), backupCreatedAt: backupCreatedAt, preRestoreFileId: pre.fileId, preRestoreName: pre.name, rows: out },
+      note: 'กู้คืนข้อมูลจากไฟล์ ' + file.getName() + ' (ข้อมูลก่อนกู้คืนเก็บไว้ในไฟล์ ' + pre.name + ')',
+    }], actor);
+    return out;
+  }, LIMITS.SETUP_LOCK_TIMEOUT_MS);
+  return {
+    restored: restored,
+    preRestore: pre,
+    backupCreatedAt: backupCreatedAt,
+    message: 'กู้คืนข้อมูล ณ ' + formatThaiDateTime_(backupCreatedAt) + ' เรียบร้อยแล้ว ข้อมูลก่อนกู้คืนเก็บไว้ในไฟล์ "' + pre.name +
+      '" ทุกคนต้องเข้าสู่ระบบใหม่',
+  };
+}
+
+// ============================================================================
 // ไฟล์ต้นฉบับ: src/Config.js
 // ============================================================================
 
@@ -4618,6 +6196,10 @@ const PROP_KEYS = Object.freeze({
   AUTH_MODE: 'AUTH_MODE',                 // PASSWORD หรือ GOOGLE
   PASSWORD_PEPPER: 'PASSWORD_PEPPER',     // ค่าลับสำหรับแฮชรหัสผ่าน ห้ามแก้หรือลบ
   BACKUP_FOLDER_ID: 'BACKUP_FOLDER_ID',   // โฟลเดอร์สำรองข้อมูลใน Google Drive ของเจ้าของระบบ
+  BACKUP_SCHEDULE: 'BACKUP_SCHEDULE',     // การตั้งเวลาสำรองอัตโนมัติ (JSON: เปิด/ปิด ชั่วโมง รหัสตัวตั้งเวลา)
+  BACKUP_LAST: 'BACKUP_LAST',             // ไฟล์สำรองล่าสุดที่สำเร็จ (JSON: ไม่มีข้อมูลลับ)
+  BACKUP_LAST_AUTO: 'BACKUP_LAST_AUTO',   // ผลการสำรองอัตโนมัติครั้งล่าสุด (JSON)
+  SESSION_EPOCH: 'SESSION_EPOCH',         // เปลี่ยนค่าเมื่อกู้คืนข้อมูล เพื่อให้ทุกคนเข้าสู่ระบบใหม่
   AUDIT_HEAD: 'AUDIT_HEAD',               // ตำแหน่งและ hash ล่าสุดของ AuditLogs ใช้ตรวจการลบแถวท้ายชีต
   PASSWORD_HASH_ITERATIONS: 'PASSWORD_HASH_ITERATIONS', // จำนวนรอบแฮชรหัสผ่าน (ปรับตามความเร็วของเครื่อง Google ตอนติดตั้ง)
 });
@@ -4742,6 +6324,8 @@ const AUDIT_ACTIONS = Object.freeze({
   PROMOTE: 'PROMOTE',
   DAY_CLOSE: 'DAY_CLOSE',
   DAY_REOPEN: 'DAY_REOPEN',
+  BACKUP_SCHEDULE: 'BACKUP_SCHEDULE',
+  BACKUP_CLEANUP: 'BACKUP_CLEANUP',
 });
 
 const AUDIT_ACTION_LABELS = Object.freeze({
@@ -4765,6 +6349,8 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   PROMOTE: 'เลื่อนชั้น',
   DAY_CLOSE: 'ปิดยอดประจำวัน',
   DAY_REOPEN: 'เปิดยอดประจำวันใหม่',
+  BACKUP_SCHEDULE: 'ตั้งเวลาสำรองข้อมูลอัตโนมัติ',
+  BACKUP_CLEANUP: 'ย้ายไฟล์สำรองเก่าไปถังขยะ',
 });
 
 const SHEETS = Object.freeze({
@@ -5253,7 +6839,7 @@ const SETTINGS_DEFS = Object.freeze([
   { key: 'SESSION_MAX_HOURS', group: 'security', label: 'อายุสูงสุดของการเข้าสู่ระบบ (ชั่วโมง)', type: 'int', defaultValue: '8', min: 1, max: 12, description: 'ครบเวลานี้ต้องเข้าสู่ระบบใหม่ แม้ยังใช้งานอยู่' },
   { key: 'LOGIN_MAX_ATTEMPTS', group: 'security', label: 'ใส่รหัสผ่านผิดได้ไม่เกิน (ครั้ง)', type: 'int', defaultValue: '5', min: 3, max: 20, description: 'เกินจำนวนนี้ ชื่อผู้ใช้นั้นจะถูกล็อกชั่วคราว' },
   { key: 'LOGIN_LOCK_MINUTES', group: 'security', label: 'ระยะเวลาล็อกชั่วคราว (นาที)', type: 'int', defaultValue: '15', min: 5, max: 360, description: 'ระยะเวลาที่ห้ามเข้าสู่ระบบหลังใส่รหัสผ่านผิดเกินกำหนด' },
-  { key: 'BACKUP_RETENTION', group: 'backup', label: 'จำนวนไฟล์สำรองรายวันที่เก็บไว้', type: 'int', defaultValue: '60', min: 7, max: 365, description: 'ไม่นับไฟล์วันแรกของเดือนซึ่งเก็บถาวร (ใช้ในระยะที่ 7)' },
+  { key: 'BACKUP_RETENTION', group: 'backup', label: 'จำนวนไฟล์สำรองอัตโนมัติที่เก็บไว้', type: 'int', defaultValue: '60', min: 7, max: 365, description: 'ไฟล์สำรองอัตโนมัติไฟล์แรกของทุกเดือน ไฟล์ที่สำรองเอง และไฟล์ก่อนกู้คืน เก็บถาวรเสมอ ไม่นับในจำนวนนี้' },
 ]);
 
 // ============================================================================
@@ -5319,6 +6905,13 @@ function formatThaiDate_(iso, style) {
   if (style === 'short') return d + ' ' + SHORT[mo - 1] + ' ' + be;
   if (style === 'numeric') return m[3] + '/' + m[2] + '/' + be;
   return d + ' ' + LONG[mo - 1] + ' ' + be;
+}
+
+/** เดือนภาษาไทยจาก 'YYYY-MM' (ค.ศ.) เช่น '2026-11' → 'พฤศจิกายน 2569' */
+function formatThaiMonth_(yyyyMm) {
+  var m = /^(\d{4})-(\d{2})$/.exec(String(yyyyMm === null || yyyyMm === undefined ? '' : yyyyMm));
+  if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return String(yyyyMm || '');
+  return formatThaiDate_(m[1] + '-' + m[2] + '-01').replace(/^1 /, '');
 }
 
 /** แสดงวันเวลาเป็นภาษาไทย เช่น 21 พฤศจิกายน 2569 เวลา 08:05 น. */
@@ -5675,6 +7268,7 @@ const SHARED_CLIENT_FUNCTIONS_ = [
   'autoAllocate_',
   'fiscalYearRange_',
   'academicYearRange_',
+  'formatThaiMonth_',
 ];
 
 /** ซอร์สโค้ดของฟังก์ชันที่ใช้ร่วมกัน สำหรับฝังลงในหน้าเว็บ (ระยะที่ 2) */
@@ -5702,6 +7296,7 @@ function sharedClientSource_() {
     autoAllocate_: autoAllocate_,
     fiscalYearRange_: fiscalYearRange_,
     academicYearRange_: academicYearRange_,
+    formatThaiMonth_: formatThaiMonth_,
   };
   return SHARED_CLIENT_FUNCTIONS_.map(function (name) { return String(fns[name]); }).join('\n\n');
 }
@@ -6221,8 +7816,14 @@ function isBlankRow_(row) {
 /** อ่านทั้งชีตเป็นรายการ object (เก็บไว้ในหน่วยความจำจนกว่าจะได้ lock ใหม่) */
 function dbTable_(name) {
   if (DB_TABLES_[name]) return DB_TABLES_[name];
+  const table = readTable_(name, dbSheet_(name));
+  DB_TABLES_[name] = table;
+  return table;
+}
+
+/** อ่านชีตใดก็ได้ตาม SCHEMA (ใช้กับฐานข้อมูล และกับไฟล์สำรองตอนกู้คืน) ไม่เก็บแคช */
+function readTable_(name, sheet) {
   const schema = getSchema_(name);
-  const sheet = dbSheet_(name);
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
   if (lastRow < 1 || lastCol < 1) {
@@ -6263,7 +7864,6 @@ function dbTable_(name) {
     duplicateIds: duplicateIds,
     lastRow: lastRow,
   };
-  DB_TABLES_[name] = table;
   return table;
 }
 

@@ -59,6 +59,13 @@ function formatThaiDate_(iso, style) {
   return d + ' ' + LONG[mo - 1] + ' ' + be;
 }
 
+/** เดือนภาษาไทยจาก 'YYYY-MM' (ค.ศ.) เช่น '2026-11' → 'พฤศจิกายน 2569' */
+function formatThaiMonth_(yyyyMm) {
+  var m = /^(\d{4})-(\d{2})$/.exec(String(yyyyMm === null || yyyyMm === undefined ? '' : yyyyMm));
+  if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return String(yyyyMm || '');
+  return formatThaiDate_(m[1] + '-' + m[2] + '-01').replace(/^1 /, '');
+}
+
 /** แสดงวันเวลาเป็นภาษาไทย เช่น 21 พฤศจิกายน 2569 เวลา 08:05 น. */
 function formatThaiDateTime_(iso, style) {
   if (iso === null || iso === undefined || iso === '') return '';
@@ -413,6 +420,7 @@ const SHARED_CLIENT_FUNCTIONS_ = [
   'autoAllocate_',
   'fiscalYearRange_',
   'academicYearRange_',
+  'formatThaiMonth_',
 ];
 
 /** ซอร์สโค้ดของฟังก์ชันที่ใช้ร่วมกัน สำหรับฝังลงในหน้าเว็บ (ระยะที่ 2) */
@@ -440,6 +448,7 @@ function sharedClientSource_() {
     autoAllocate_: autoAllocate_,
     fiscalYearRange_: fiscalYearRange_,
     academicYearRange_: academicYearRange_,
+    formatThaiMonth_: formatThaiMonth_,
   };
   return SHARED_CLIENT_FUNCTIONS_.map(function (name) { return String(fns[name]); }).join('\n\n');
 }

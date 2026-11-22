@@ -177,6 +177,7 @@ function voidPaymentRecords_(paymentId, reason, requestId, actor) {
   if (p.Status !== STATUS.PAYMENT.ACTIVE) {
     throw appError_(ERROR_CODES.CONFLICT, 'รายการรับเงินนี้' + (STATUS_LABELS.PAYMENT[p.Status] || p.Status) + 'แล้ว');
   }
+  assertDayOpen_(p.PaymentDate, 'ยกเลิกใบเสร็จของวันนั้น');
   const where = receiptWhere_(p.ReceiptBookNo, p.ReceiptNo);
   dbUpdate_(SHEETS.PAYMENTS, p.PaymentId, {
     Status: STATUS.PAYMENT.VOIDED,
@@ -277,6 +278,7 @@ function paymentsCreate_(ctx, payload) {
   const student = dbGet_(SHEETS.STUDENTS, studentId);
   if (!student) throw appError_(ERROR_CODES.NOT_FOUND, 'ไม่พบข้อมูลนักเรียน');
   const f = validatePaymentFields_(payload);
+  assertDayOpen_(f.paymentDate, 'บันทึกรับเงินในวันนั้น');
 
   // เล่มและเลขที่ใบเสร็จ
   const book = activeBook_();
@@ -407,6 +409,7 @@ function paymentsRequestVoid_(ctx, payload) {
   const reason = requireText_(payload.reason, 'เหตุผลการยกเลิกใบเสร็จ', { max: 500, multiline: true });
   requireKeptOriginal_(payload);
   assertNoPendingRequest_(p.PaymentId);
+  assertDayOpen_(p.PaymentDate, 'ยกเลิกใบเสร็จของวันนั้น');
   const entry = dbGet_(SHEETS.RECEIPT_ENTRIES, p.ReceiptEntryId);
   if (!entry || entry.Status !== STATUS.RECEIPT_ENTRY.USED) {
     throw appError_(ERROR_CODES.CONFLICT, 'สถานะของเลขที่ใบเสร็จนี้ไม่ใช่ "ใช้แล้ว" กรุณาตรวจสอบทะเบียนคุม');
@@ -474,7 +477,9 @@ function paymentsRequestCorrection_(ctx, payload) {
   const p = requireActivePayment_(payload.paymentId);
   const reason = requireText_(payload.reason, 'เหตุผลการแก้ไข', { max: 500, multiline: true });
   assertNoPendingRequest_(p.PaymentId);
+  assertDayOpen_(p.PaymentDate, 'แก้ไขรายการรับเงินของวันนั้น');
   const next = validateCorrection_(p, payload);
+  assertDayOpen_(next.paymentDate, 'ย้ายรายการรับเงินไปวันนั้น');
   const display = correctionDisplay_(p, next, ledgerContext_(), ledgerContextExcluding_(p.PaymentId));
   if (!display.some(function (d) { return d.changed; })) throw validationError_('ข้อมูลที่แก้ไขเหมือนรายการเดิมทุกช่อง');
   next.display = display;
@@ -500,6 +505,8 @@ function applyPaymentCorrection_(data, reason, requestId, actor) {
   if (old.Status !== STATUS.PAYMENT.ACTIVE) {
     throw appError_(ERROR_CODES.CONFLICT, 'รายการรับเงินเดิม' + (STATUS_LABELS.PAYMENT[old.Status] || old.Status) + 'แล้ว จึงแก้ไขไม่ได้');
   }
+  assertDayOpen_(old.PaymentDate, 'แก้ไขรายการรับเงินของวันนั้น');
+  assertDayOpen_(data.paymentDate, 'ย้ายรายการรับเงินไปวันนั้น');
   const entry = dbGet_(SHEETS.RECEIPT_ENTRIES, old.ReceiptEntryId);
   if (!entry || entry.Status !== STATUS.RECEIPT_ENTRY.USED || entry.PaymentId !== old.PaymentId) {
     throw appError_(ERROR_CODES.CONFLICT, 'สถานะของเลขที่ใบเสร็จนี้เปลี่ยนไปแล้ว กรุณาตรวจสอบทะเบียนคุม');

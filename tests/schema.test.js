@@ -19,7 +19,7 @@ const SYSTEM_COLUMNS = ['CreatedAt', 'CreatedBy', 'UpdatedAt', 'UpdatedBy'];
 
 /** ฟังก์ชันที่อนุญาตให้เรียกจากภายนอก (google.script.run / เมนู / ทริกเกอร์) */
 const PUBLIC_FUNCTIONS = ['doGet', 'onOpen', 'api', 'SetupDatabase', 'menuSetupDatabase', 'menuVerifyAuditLog',
-  'menuSetupAdmin', 'ownerSetupAdmin'];
+  'menuSetupAdmin', 'ownerSetupAdmin', 'dailyBackup'];
 
 test('มีครบ 12 ชีตตามข้อกำหนด และอีก 3 ชีตที่ออกแบบเพิ่ม', () => {
   const required = ['Users', 'Students', 'AcademicYears', 'FeeSettings', 'FeeAssessments', 'Payments',

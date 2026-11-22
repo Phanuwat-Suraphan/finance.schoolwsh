@@ -17,7 +17,7 @@
  */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { setupFinance } = require('./finance-helpers');
+const { buildArrearsDataset, arrearsNextYear } = require('./finance-helpers');
 
 const KEYS = ['students', 'owingStudents', 'netSatang', 'paidSatang', 'currentSatang', 'priorSatang', 'laterSatang', 'totalSatang', 'overdueSatang'];
 function pick(o, keys) {
@@ -33,43 +33,8 @@ function fig(students, owing, net, paid, current, prior, later, total, overdue) 
   };
 }
 
-function build() {
-  const t = setupFinance();
-  const { h } = t;
-  const s = {
-    A: t.student('10001', 'เอ', 'ป.1', { classNo: 1 }),
-    B: t.student('10002', 'บี', 'ป.1', { classNo: 2 }),
-    C: t.student('10003', 'ซี', 'ป.1', { room: '2', classNo: 1 }),
-    F: t.student('10006', 'เอฟ', 'ป.1', { room: '2', classNo: 2 }),
-    D: t.student('10004', 'ดี', 'ป.2'),
-    E: t.student('10005', 'อี', 'ป.6', { classNo: 1 }),
-    G: t.student('10007', 'จี', 'ป.6', { classNo: 2 }),
-  };
-  t.generate(t.feeOne({ gradeLevels: ['ป.1'], term: '1', amount: '500', dueDate: '2026-06-30' }).feeSettingId);
-  t.generate(t.feeOne({ gradeLevels: ['ป.2'], term: '1', amount: '600', dueDate: '2026-06-30' }).feeSettingId);
-  t.generate(t.feeOne({ gradeLevels: ['ป.6'], term: '1', amount: '700', dueDate: '2026-06-30' }).feeSettingId);
-  h.ok('students.setStatus', { studentId: s.F.studentId, status: 'TRANSFERRED', statusDate: '2026-08-15', note: 'ย้ายตามผู้ปกครอง', year: 2569 }, t.fin);
-  t.generate(t.feeOne({ gradeLevels: ['ป.1'], term: '2', amount: '500', dueDate: '2026-12-31' }).feeSettingId);
-  t.book('1/2569', 1, 100);
-  t.pay(s.A.studentId, 500);
-  t.pay(s.B.studentId, 200);
-  t.pay(s.D.studentId, 600);
-  t.pay(s.E.studentId, 300);
-  t.pay(s.G.studentId, 700);
-  const cTerm1 = t.ledger(s.C.studentId).assessments.find((a) => a.term === '1');
-  const req = h.ok('adjustments.request', { assessmentId: cTerm1.assessmentId, type: 'EXEMPTION', reason: 'ทุนการศึกษา', referenceDoc: 'ประกาศ 1/2569' }, t.fin);
-  h.ok('approvals.decide', { requestId: req.requestId, decision: 'APPROVE' }, t.dir);
-  return { t, h, s };
-}
-
-function nextYear(t, h, s) {
-  h.ok('years.create', { year: 2570 }, t.admin);
-  h.ok('students.promoteCommit', { fromYear: 2569, toYear: 2570, graduationDate: '2027-03-31' }, t.fin);
-  t.generate(t.feeOne({ year: 2570, gradeLevels: ['ป.2'], term: '1', amount: '800', startDate: '2027-05-16', dueDate: '2027-06-30' }).feeSettingId);
-  t.generate(t.feeOne({ year: 2570, gradeLevels: ['ป.3'], term: '1', amount: '900', startDate: '2027-05-16', dueDate: '2027-06-30' }).feeSettingId);
-  const r = t.pay(s.A.studentId, 800);
-  return r;
-}
+const build = buildArrearsDataset;
+const nextYear = arrearsNextYear;
 
 test('ยอดค้างปีการศึกษา 2569: ทั้งโรงเรียน รายชั้น และรายห้อง ตรงกับการคำนวณมือ', () => {
   const { t, h, s } = build();

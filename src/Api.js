@@ -101,6 +101,24 @@ function apiActions_() {
     'payments.get': { roles: FINANCE_VIEW, write: false, handler: paymentsGet_ },
     'payments.requestVoid': { roles: FINANCE, write: true, handler: paymentsRequestVoid_ },
     'payments.requestCorrection': { roles: FINANCE, write: true, handler: paymentsRequestCorrection_ },
+    // ภาพรวม รายงาน และการปิดยอดประจำวัน
+    'dashboard.summary': { roles: FINANCE_VIEW, write: false, handler: dashboardSummary_ },
+    'reports.daily': { roles: FINANCE_VIEW, write: false, handler: reportsDaily_ },
+    'reports.collections': { roles: FINANCE_VIEW, write: false, handler: reportsCollections_ },
+    'reports.cancelled': { roles: FINANCE_VIEW, write: false, handler: reportsCancelled_ },
+    'reports.annual': { roles: FINANCE_VIEW, write: false, handler: reportsAnnual_ },
+    'reports.receiptUsage': { roles: FINANCE_VIEW, write: false, handler: reportsReceiptUsage_ },
+    'reports.notices': { roles: FINANCE_VIEW, write: false, handler: reportsNotices_ },
+    'closings.list': { roles: FINANCE_VIEW, write: false, handler: closingsList_ },
+    'closings.close': { roles: FINANCE, write: true, handler: closingsClose_ },
+    'closings.reopen': { roles: DIRECTOR, write: true, handler: closingsReopen_ },
+    // สำรองและกู้คืนข้อมูล (ผู้ดูแลระบบ: เห็นเฉพาะรายชื่อไฟล์และจำนวนแถว ไม่เห็นรายละเอียดการเงิน)
+    'backups.status': { roles: ADMIN, write: false, handler: backupsStatus_ },
+    'backups.list': { roles: ADMIN, write: false, handler: backupsList_ },
+    'backups.create': { roles: ADMIN, write: true, handler: backupsCreate_ },
+    'backups.setSchedule': { roles: ADMIN, write: true, handler: backupsSetSchedule_ },
+    'backups.restorePreview': { roles: ADMIN, write: false, handler: backupsRestorePreview_ },
+    'backups.restore': { roles: ADMIN, write: true, handler: backupsRestore_ },
   };
   Object.keys(API_ACTIONS_).forEach(function (k) { Object.freeze(API_ACTIONS_[k]); });
   Object.freeze(API_ACTIONS_);
