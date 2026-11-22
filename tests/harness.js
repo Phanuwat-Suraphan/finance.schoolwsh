@@ -485,6 +485,12 @@ function createScriptApp(env) {
   });
   return {
     getProjectTriggers: () => env.triggers.slice(),
+    AuthMode: { NONE: 'NONE', CUSTOM_FUNCTION: 'CUSTOM_FUNCTION', LIMITED: 'LIMITED', FULL: 'FULL' },
+    /** หน้าขออนุญาตแบบเลือกทีละข้อ: ถ้ายังขาดสิทธิ์ Google หยุดการทำงานแล้วขออนุญาตใหม่ */
+    requireAllScopes(mode) {
+      env.consentChecks.push(mode);
+      if (env.missingConsent) throw new Error('Exception: Authorization is required to perform that action.');
+    },
     newTrigger(fn) {
       const spec = { fn: String(fn), everyDays: null, atHour: null, timezone: null };
       const timeBased = {
@@ -565,6 +571,8 @@ function createEnv(options) {
     triggers: [],
     driveFailure: null, // ตั้งเป็นข้อความเพื่อจำลอง Drive ล้มเหลว
     scriptAppFailure: null, // ตั้งเป็นข้อความเพื่อจำลอง ScriptApp ยังไม่ได้รับสิทธิ์
+    missingConsent: false, // true = เจ้าของระบบยังไม่ได้อนุญาตสิทธิ์บางข้อ (ScriptApp.requireAllScopes จะหยุดการทำงาน)
+    consentChecks: [],
   };
 
   const nowMs = () => (env.fixedNow ? env.fixedNow.getTime() : Date.now());
@@ -659,7 +667,8 @@ function createEnv(options) {
     }),
     ScriptApp: new Proxy(createScriptApp(env), {
       get(target, prop) {
-        if (env.scriptAppFailure && typeof target[prop] === 'function') return () => { throw new Error(env.scriptAppFailure); };
+        // requireAllScopes ไม่ต้องใช้สิทธิ์ script.scriptapp จึงไม่จำลองให้ล้มเหลว
+        if (env.scriptAppFailure && typeof target[prop] === 'function' && prop !== 'requireAllScopes') return () => { throw new Error(env.scriptAppFailure); };
         return target[prop];
       },
     }),

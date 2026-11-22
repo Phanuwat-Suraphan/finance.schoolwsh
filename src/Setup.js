@@ -25,6 +25,7 @@ const MENU_TITLE = 'ระบบเงินบำรุงการศึกษ
  */
 function SetupDatabase() {
   assertOwnerContext_();
+  requireAllPermissions_();
   const ss = resolveSetupSpreadsheet_();
   dbUseSpreadsheet_(ss);
   const report = withScriptLock_(function () {
@@ -79,6 +80,7 @@ function menuPlatformCheck() {
   const ui = SpreadsheetApp.getUi();
   try {
     assertOwnerContext_();
+    requireAllPermissions_();
     const result = platformCheck_();
     console.log('ผลการตรวจความพร้อมของระบบ\n' + formatPlatformCheck_(result));
     ui.alert('ผลการตรวจความพร้อมของระบบ', formatPlatformCheck_(result), ui.ButtonSet.OK);

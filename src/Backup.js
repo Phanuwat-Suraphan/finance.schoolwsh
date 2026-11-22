@@ -65,8 +65,19 @@ function safeParseJson_(text, fallback) {
   }
 }
 
-const PERMISSION_FIX_HINT = 'วิธีแก้: เจ้าของระบบเปิด Apps Script กด Run ฟังก์ชัน SetupDatabase อีกครั้ง ' +
-  'ในหน้าขออนุญาตของ Google ให้ติ๊ก "เลือกทั้งหมด (Select all)" ก่อนกดดำเนินการต่อ แล้ว Deploy เวอร์ชันใหม่ (คู่มือติดตั้ง หัวข้อปัญหาที่พบบ่อย)';
+const PERMISSION_FIX_HINT = 'วิธีแก้ (เจ้าของระบบ): เปิด Apps Script → เลือกฟังก์ชัน SetupDatabase → กด Run → ' +
+  'ในหน้าขออนุญาตของ Google ติ๊ก "เลือกทั้งหมด (Select all)" แล้วกดดำเนินการต่อ จากนั้นกลับมาทำรายการนี้อีกครั้ง ' +
+  '(ไม่ต้อง Deploy ใหม่ ดูคู่มือติดตั้ง หัวข้อปัญหาที่พบบ่อย)';
+
+/**
+ * ให้ Google ขออนุญาตสิทธิ์ที่ยังขาดทุกข้อก่อนเริ่มทำงาน
+ * หน้าขออนุญาตของ Google ให้เลือกอนุญาตทีละข้อได้ ถ้าเจ้าของระบบไม่ได้ติ๊กบางข้อ (เช่น Google ไดรฟ์)
+ * คำสั่งนี้จะหยุดการทำงานแล้วแสดงหน้าขออนุญาตเฉพาะข้อที่ขาดอีกครั้ง จนกว่าจะอนุญาตครบ
+ */
+function requireAllPermissions_() {
+  if (typeof ScriptApp === 'undefined' || typeof ScriptApp.requireAllScopes !== 'function') return;
+  ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
+}
 
 /** ข้อผิดพลาดเพราะเจ้าของระบบยังไม่ได้อนุญาตสิทธิ์ (เช่น ไม่ได้ติ๊กสิทธิ์บางข้อในหน้าขออนุญาตแบบเลือกได้ของ Google) */
 function isPermissionError_(e) {

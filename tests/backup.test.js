@@ -252,3 +252,18 @@ test('หน้าเว็บ: ตั้งเวลาไม่ได้เพ
   assert.match(res.error.message, /เลือกทั้งหมด/);
   assert.doesNotMatch(res.error.message, /googleapis|Exception/);
 });
+
+test('ติดตั้งเมื่อยังอนุญาตสิทธิ์ไม่ครบ: Google หยุดก่อนเริ่มติดตั้งเพื่อขออนุญาตข้อที่ขาด และไม่มีการเปลี่ยนแปลงใด ๆ', () => {
+  const h = createEnv();
+  h.env.missingConsent = true;
+  assert.throws(() => h.gas.SetupDatabase(), /Authorization is required/);
+  assert.equal(h.sheet('Users'), null, 'ยังไม่สร้างชีตใด ๆ');
+  assert.deepEqual(h.env.consentChecks, ['FULL']);
+  h.env.missingConsent = false;
+  h.newExecution();
+  const report = plain(h.gas.SetupDatabase());
+  assert.equal(report.backupScheduleCreated, 18);
+  h.newExecution();
+  h.gas.menuPlatformCheck();
+  assert.deepEqual(h.env.consentChecks, ['FULL', 'FULL', 'FULL'], 'เมนูตรวจความพร้อมขอสิทธิ์ที่ขาดก่อนตรวจด้วย');
+});
