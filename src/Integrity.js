@@ -278,3 +278,99 @@ function integrityStatus_() {
   if (last && last.by) last.byName = last.by === ACTORS.SYSTEM.username ? 'ระบบ (ตรวจอัตโนมัติ)' : displayNameOf_(last.by, userDisplayNames_());
   return { last: last, today: todayIso_() };
 }
+
+// ---------------------------------------------------------------------------
+// ตรวจความพร้อมของระบบบน Google จริง (เมนูใน Google Sheets สำหรับเจ้าของระบบ)
+// ชุดทดสอบอัตโนมัติรันบนตัวจำลอง ข้อนี้ยืนยันว่าบริการของ Google ทำงานตามที่ระบบคาดไว้
+// ใช้ไฟล์ชั่วคราวแล้วย้ายไปถังขยะ ไม่แก้ข้อมูลจริง
+// ---------------------------------------------------------------------------
+
+const PLATFORM_CHECK_FILE = 'ตรวจความพร้อมระบบเงินบำรุง (ไฟล์ชั่วคราว ลบได้)';
+
+function platformCheck_() {
+  const results = [];
+  function item(label, fn) {
+    try {
+      const detail = fn();
+      results.push({ label: label, ok: true, detail: detail || '' });
+    } catch (e) {
+      results.push({ label: label, ok: false, detail: isAppError_(e) ? e.userMessage : String(e && e.message ? e.message : e).slice(0, 200) });
+    }
+  }
+  function expect(cond, message) { if (!cond) throw new Error(message); }
+
+  item('เขตเวลาของสคริปต์เป็น Asia/Bangkok', function () {
+    const tz = Session.getScriptTimeZone();
+    expect(tz === APP.TIMEZONE, 'ตอนนี้เป็น ' + tz + ' (แก้ใน ⚙️ การตั้งค่าโปรเจกต์)');
+  });
+  item('ฐานข้อมูลเปิดได้ และมีชีตครบ ' + SHEET_ORDER.length + ' ชีต', function () {
+    const ss = db_();
+    const missing = SHEET_ORDER.filter(function (n) { return !ss.getSheetByName(n); });
+    expect(!missing.length, 'ไม่พบชีต: ' + missing.join(', ') + ' (กด Run SetupDatabase)');
+  });
+  item('ค่าระบบใน Script Properties ครบ (ไม่แสดงค่า)', function () {
+    const props = PropertiesService.getScriptProperties();
+    const missing = [PROP_KEYS.DB_SPREADSHEET_ID, PROP_KEYS.AUTH_MODE, PROP_KEYS.PASSWORD_PEPPER, PROP_KEYS.PASSWORD_HASH_ITERATIONS]
+      .filter(function (k) { return !props.getProperty(k); });
+    expect(!missing.length, 'ขาด: ' + missing.join(', '));
+  });
+  item('LockService ป้องกันการบันทึกชนกันได้', function () {
+    const lock = LockService.getScriptLock();
+    expect(lock.tryLock(10000), 'ขอ lock ไม่ได้ภายใน 10 วินาที (อาจมีผู้ใช้กำลังบันทึก ลองใหม่)');
+    lock.releaseLock();
+  });
+  item('CacheService เก็บการเข้าสู่ระบบได้', function () {
+    const cache = CacheService.getScriptCache();
+    const key = 'platform-check-' + randomHex_(8);
+    cache.put(key, 'ok', 60);
+    expect(cache.get(key) === 'ok', 'อ่านค่าที่เพิ่งเก็บไม่ได้');
+    cache.remove(key);
+  });
+  item('SHA-256 ถูกต้อง (ใช้กับรหัสผ่าน ลูกโซ่ประวัติ และรหัสตรวจสอบ)', function () {
+    expect(sha256Hex_('abc') === 'ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad', 'ผลลัพธ์ไม่ตรงกับค่ามาตรฐาน');
+  });
+  let temp = null;
+  item('Google Sheets เก็บข้อความตรงทุกตัวอักษร (เลข 0 นำหน้า วันที่ ภาษาไทย สูตร)', function () {
+    temp = SpreadsheetApp.create(PLATFORM_CHECK_FILE);
+    const sheet = temp.getSheets()[0];
+    const input = ['00123', '2026-11-21', 'เด็กหญิงทดสอบ ณ เชียงใหม่', '=1+1', '+66812345678'];
+    const range = sheet.getRange(1, 1, 1, input.length);
+    range.setNumberFormats([input.map(function () { return '@'; })]);
+    range.setValues([input.map(sanitizeForSheet_)]);
+    SpreadsheetApp.flush();
+    const back = range.getValues()[0].map(function (v) { return unsanitizeFromSheet_(String(v)); });
+    input.forEach(function (v, i) { expect(back[i] === v, 'เขียน "' + v + '" อ่านกลับได้ "' + back[i] + '"'); });
+  });
+  item('คัดลอกชีตไปไฟล์อื่นได้ (ใช้ตอนสำรองข้อมูล)', function () {
+    expect(temp, 'สร้างไฟล์ชั่วคราวไม่สำเร็จ');
+    const copy = temp.getSheets()[0].copyTo(temp);
+    copy.setName('สำเนาตรวจ');
+    expect(copy.getRange(1, 1).getValue() === '00123', 'ค่าในชีตที่คัดลอกไม่ตรง');
+  });
+  item('Google ไดรฟ์ใช้งานได้ (ย้ายไฟล์ชั่วคราวไปถังขยะ)', function () {
+    expect(temp, 'สร้างไฟล์ชั่วคราวไม่สำเร็จ');
+    DriveApp.getFileById(temp.getId()).setTrashed(true);
+    temp = null;
+  });
+  item('ตั้งเวลาสำรองข้อมูลอัตโนมัติไว้แล้ว', function () {
+    const s = backupScheduleStatus_();
+    expect(s.enabled, 'ยังไม่ได้เปิด (ผู้ดูแลระบบเปิดได้ในหน้าสำรองและกู้คืนข้อมูล)');
+    expect(s.triggerFound, 'ไม่พบตัวตั้งเวลาใน Apps Script (เปิดหน้าสำรองข้อมูลแล้วตั้งเวลาใหม่)');
+    return 'ทุกวัน ' + s.hourLabel;
+  });
+  item('ลูกโซ่ประวัติการใช้งานไม่ขาด', function () {
+    const r = auditVerifyChain_();
+    expect(r.ok, 'พบปัญหา ' + r.problemCount + ' จุด (เปิดหน้าตรวจความถูกต้องของข้อมูลในระบบ)');
+    return r.total + ' รายการ';
+  });
+  if (temp) {
+    try { DriveApp.getFileById(temp.getId()).setTrashed(true); } catch (e) { /* ลบเองได้ภายหลัง ชื่อไฟล์บอกว่าลบได้ */ }
+  }
+  return { ok: results.every(function (r) { return r.ok; }), results: results };
+}
+
+function formatPlatformCheck_(r) {
+  const lines = r.results.map(function (x) { return (x.ok ? '✓ ' : '✗ ') + x.label + (x.detail ? ': ' + x.detail : ''); });
+  lines.unshift(r.ok ? 'พร้อมใช้งาน: ผ่านทุกข้อ' : 'พบข้อที่ต้องแก้ ' + r.results.filter(function (x) { return !x.ok; }).length + ' ข้อ', '');
+  return lines.join('\n');
+}

@@ -41,6 +41,7 @@ function onOpen() {
     .addItem('1) ติดตั้ง / ตรวจสอบโครงสร้างฐานข้อมูล', 'menuSetupDatabase')
     .addItem('2) ตรวจสอบความถูกต้องของประวัติการใช้งาน', 'menuVerifyAuditLog')
     .addItem('3) สร้างหรือรีเซ็ตบัญชีผู้ดูแลระบบ', 'menuSetupAdmin')
+    .addItem('4) ตรวจความพร้อมของระบบบน Google (ไม่แก้ข้อมูลจริง)', 'menuPlatformCheck')
     .addToUi();
 }
 
@@ -70,6 +71,19 @@ function menuVerifyAuditLog() {
     ui.alert('ผลการตรวจสอบประวัติการใช้งาน', formatAuditVerifyReport_(result), ui.ButtonSet.OK);
   } catch (e) {
     ui.alert('ตรวจสอบไม่สำเร็จ', ownerErrorMessage_(e), ui.ButtonSet.OK);
+  }
+}
+
+/** เมนู 4: ตรวจว่าบริการของ Google ที่ระบบใช้ทำงานถูกต้อง (ใช้ไฟล์ชั่วคราว แล้วย้ายไปถังขยะ) */
+function menuPlatformCheck() {
+  const ui = SpreadsheetApp.getUi();
+  try {
+    assertOwnerContext_();
+    const result = platformCheck_();
+    console.log('ผลการตรวจความพร้อมของระบบ\n' + formatPlatformCheck_(result));
+    ui.alert('ผลการตรวจความพร้อมของระบบ', formatPlatformCheck_(result), ui.ButtonSet.OK);
+  } catch (e) {
+    ui.alert('ตรวจไม่สำเร็จ', ownerErrorMessage_(e), ui.ButtonSet.OK);
   }
 }
 

@@ -193,7 +193,7 @@ test('เมนูใน Google Sheets: แสดงเมนู ยืนยั
   h.gas.onOpen();
   assert.equal(h.env.menus.length, 1);
   assert.equal(h.env.menus[0].title, 'ระบบเงินบำรุงการศึกษา');
-  assert.deepEqual(h.env.menus[0].items.map((i) => i.fn), ['menuSetupDatabase', 'menuVerifyAuditLog', 'menuSetupAdmin']);
+  assert.deepEqual(h.env.menus[0].items.map((i) => i.fn), ['menuSetupDatabase', 'menuVerifyAuditLog', 'menuSetupAdmin', 'menuPlatformCheck']);
 
   h.env.uiResponses.push('NO');
   h.gas.menuSetupDatabase();
@@ -235,4 +235,27 @@ test('ติดตั้งแล้วมีปีการศึกษาเ�
   assert.equal(again.academicYearCreated, null);
   h.newExecution();
   assert.equal(h.gas.dbAll_('AcademicYears').length, 1);
+});
+
+test('เมนู 4 ตรวจความพร้อมของระบบ: ผ่านทุกข้อ ไม่แก้ข้อมูลจริง ไฟล์ชั่วคราวไปถังขยะ และเฉพาะเจ้าของระบบ', () => {
+  const h = createInstalledEnv({ now: '2026-11-21T10:00:00+07:00' });
+  const auditBefore = h.sheet('AuditLogs').getLastRow();
+  h.gas.menuPlatformCheck();
+  const last = h.env.alerts[h.env.alerts.length - 1];
+  assert.equal(last.title, 'ผลการตรวจความพร้อมของระบบ');
+  assert.match(last.message, /^พร้อมใช้งาน: ผ่านทุกข้อ/);
+  assert.equal((last.message.match(/✓/g) || []).length, 11);
+  assert.equal(h.sheet('AuditLogs').getLastRow(), auditBefore, 'ไม่บันทึกข้อมูลใด ๆ');
+  const temp = Array.from(h.env.spreadsheets.values()).find((ss) => /ตรวจความพร้อมระบบ/.test(ss.getName()));
+  assert.equal(h.env.driveMeta.get(temp.getId()).trashed, true, 'ไฟล์ชั่วคราวอยู่ในถังขยะ');
+
+  h.gas.ScriptApp.getProjectTriggers().forEach((t) => h.gas.ScriptApp.deleteTrigger(t));
+  h.newExecution();
+  h.gas.menuPlatformCheck();
+  assert.match(h.env.alerts[h.env.alerts.length - 1].message, /✗ ตั้งเวลาสำรองข้อมูลอัตโนมัติไว้แล้ว: ไม่พบตัวตั้งเวลา/);
+
+  h.setUsers('someone@example.com', 'owner@example.com');
+  h.newExecution();
+  h.gas.menuPlatformCheck();
+  assert.match(h.env.alerts[h.env.alerts.length - 1].message, /เฉพาะเจ้าของระบบ/);
 });
