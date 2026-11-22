@@ -423,6 +423,56 @@ async function main() {
     await p.getByText('2 ฉบับ รวม 500.00 บาท').waitFor();
     check((await p.locator('.data-table tbody tr').count()) === 2, 'รายการรับเงินวันนี้ 2 ฉบับ รวม 500.00 บาท');
     await shot(p, '23-payment-history');
+
+    // ------------------------------------------------------------------ ระยะที่ 5: ทะเบียนคุมใบเสร็จ
+    await nav(p, 'รับชำระเงิน');
+    await p.getByLabel('ค้นหานักเรียน').fill('10099');
+    await p.locator('.data-table tbody tr', { hasText: '10099' }).click();
+    await p.getByRole('button', { name: 'ใบเสร็จเลขที่ 3 เขียนผิดหรือชำรุด? ยกเลิกเลขที่นี้' }).click();
+    await modal.getByLabel(/^เหตุผลการยกเลิก/).fill('เขียนจำนวนเงินผิด');
+    await modal.getByRole('button', { name: 'ส่งคำขอยกเลิก', exact: true }).click();
+    await modal.getByText('กรุณายืนยันว่าเก็บใบเสร็จฉบับที่ยกเลิกไว้ครบทุกส่วนแล้ว (ห้ามฉีกทิ้ง)').waitFor();
+    check(true, 'ยกเลิกเลขที่ต้องยืนยันว่าเก็บใบเสร็จฉบับที่ยกเลิกไว้');
+    await modal.getByLabel('ข้าพเจ้าเก็บใบเสร็จฉบับที่ยกเลิกไว้ครบทุกส่วนแล้ว (ห้ามฉีกทิ้ง)').check();
+    await modal.getByRole('button', { name: 'ส่งคำขอยกเลิก', exact: true }).click();
+    await toast(p, 'กันเลขที่ 3 ไว้แล้ว และส่งคำขอยกเลิกให้ผู้อำนวยการพิจารณาแล้ว');
+    await p.getByText('เล่มที่ 1/2570 เลขที่ 4', { exact: true }).waitFor();
+    check(true, 'ระหว่างรออนุมัติยกเลิกเลขที่ 3 เลขที่ถัดไปเลื่อนเป็น 4');
+    await p.getByRole('button', { name: /^รับเต็มยอดค้าง/ }).click();
+    await p.locator('#confirm-receipt').check();
+    await p.getByRole('button', { name: 'บันทึกการรับเงิน' }).click();
+    await p.getByRole('heading', { name: 'บันทึกการรับเงินเรียบร้อย' }).waitFor();
+    check(await p.getByText('เล่มที่ 1/2570 เลขที่ 4', { exact: true }).isVisible(), 'รับเงินด้วยเลขที่ 4 ได้ระหว่างรออนุมัติยกเลิกเลขที่ 3');
+
+    await nav(p, 'รายการรับเงิน');
+    await p.locator('.data-table tbody tr', { hasText: 'เลขที่ 1' }).click();
+    await p.locator('.modal').getByRole('button', { name: 'ขอยกเลิกใบเสร็จ' }).click();
+    await modal.getByLabel(/^เหตุผลการยกเลิกใบเสร็จ/).fill('ผู้ปกครองแจ้งว่าใบเสร็จเขียนชื่อผิด');
+    await modal.getByLabel('ข้าพเจ้าเก็บใบเสร็จฉบับที่ยกเลิกไว้ครบทุกส่วนแล้ว (ห้ามฉีกทิ้ง)').check();
+    await modal.getByRole('button', { name: 'ส่งคำขอยกเลิกใบเสร็จ' }).click();
+    await toast(p, 'ส่งคำขอยกเลิกใบเสร็จ เล่มที่ 1/2570 เลขที่ 1 ให้ผู้อำนวยการพิจารณาแล้ว');
+
+    await p.locator('.data-table tbody tr', { hasText: 'เลขที่ 2' }).click();
+    await p.locator('.modal').getByRole('button', { name: 'ขอแก้ไขรายการ' }).click();
+    await p.getByRole('heading', { name: 'ขอแก้ไขรายการรับเงิน ใบเสร็จเล่มที่ 1/2570 เลขที่ 2' }).waitFor();
+    await p.getByText('ยอดตัดชำระรวม 200.00 บาท เท่ากับจำนวนเงินที่รับ').waitFor();
+    check(true, 'หน้าแก้ไขรายการแสดงค่าเดิมพร้อมการตัดชำระเดิม');
+    await p.getByLabel(/^เลขอ้างอิงการโอน/).fill('KTB-20261121-009');
+    await p.getByLabel(/^เหตุผลการแก้ไข/).fill('พิมพ์เลขอ้างอิงการโอนผิด');
+    await shot(p, '26-payment-correction');
+    await p.getByRole('button', { name: 'ส่งคำขอแก้ไข' }).click();
+    await toast(p, 'ส่งคำขอแก้ไขรายการใบเสร็จเล่มที่ 1/2570 เลขที่ 2 ให้ผู้อำนวยการพิจารณาแล้ว');
+    await p.getByRole('heading', { name: 'เด็กหญิงมานี มีนา' }).waitFor();
+    check(await p.getByText('รออนุมัติ: แก้ไขรายการรับเงินที่บันทึกผิด').isVisible(), 'บัญชีนักเรียนแสดงว่ารายการรอแก้ไข');
+
+    await nav(p, 'เล่มใบเสร็จ');
+    await p.locator('.data-table tbody tr', { hasText: '1/2570' }).click();
+    await p.getByRole('heading', { name: 'เล่มที่ 1/2570 (เลขที่ 1–50)' }).waitFor();
+    const cellClass = async (n) => p.locator('.num-cell', { hasText: new RegExp('^' + n + '$') }).getAttribute('class');
+    check(/num-CANCEL_PENDING/.test(await cellClass(1)) && /num-USED/.test(await cellClass(2)) &&
+      /num-CANCEL_PENDING/.test(await cellClass(3)) && /num-USED/.test(await cellClass(4)) && /num-UNUSED/.test(await cellClass(5)),
+      'ตารางเลขที่แสดงสถานะทุกใบ: 1 และ 3 รออนุมัติยกเลิก, 2 และ 4 ใช้แล้ว, 5 ยังไม่ใช้');
+    await shot(p, '27-receipt-grid');
     await desk.context.close();
 
     // ------------------------------------------------------------------ มือถือ: ผู้อำนวยการ
@@ -433,8 +483,8 @@ async function main() {
     await login(m, 'director1', 'TempPass456');
     await forcedChange(m, 'TempPass456', 'Director2569pw');
     await m.getByRole('heading', { name: /สวัสดี คุณนายสมชาย รักโรงเรียน/ }).waitFor();
-    await m.locator('.stat', { hasText: 'คำขอรอพิจารณา' }).getByText('2 รายการ').waitFor();
-    check(true, 'หน้าหลักผู้อำนวยการแสดงคำขอรอพิจารณา 2 รายการ');
+    await m.locator('.stat', { hasText: 'คำขอรอพิจารณา' }).getByText('5 รายการ').waitFor();
+    check(true, 'หน้าหลักผู้อำนวยการแสดงคำขอรอพิจารณา 5 รายการ');
     check(await noHorizontalScroll(m), 'มือถือ: หน้าหลักไม่มีแถบเลื่อนแนวนอน');
     const sideBox = await m.locator('.sidebar').boundingBox();
     check(!sideBox || sideBox.x + sideBox.width <= 1, 'มือถือ: เมนูข้างซ่อนไว้จนกว่าจะกดปุ่มเมนู');
@@ -471,8 +521,21 @@ async function main() {
     await m.locator('.modal').getByLabel(/^ความเห็น/).fill('ขอเอกสารประกาศทุนฉบับจริงก่อน');
     await m.locator('.modal').getByRole('button', { name: 'ไม่อนุมัติ' }).click();
     await toast(m, 'ไม่อนุมัติคำขอเรียบร้อยแล้ว');
+    await m.locator('.data-table tbody tr', { hasText: 'ยกเลิกเลขที่ใบเสร็จ เล่มที่ 1/2570 เลขที่ 3' }).getByRole('button', { name: 'พิจารณา' }).click();
+    await m.locator('.modal').getByRole('button', { name: 'อนุมัติ', exact: true }).click();
+    await toast(m, 'อนุมัติคำขอเรียบร้อยแล้ว');
+    await m.locator('.data-table tbody tr', { hasText: 'แก้ไขรายการรับเงินที่บันทึกผิด' }).getByRole('button', { name: 'พิจารณา' }).click();
+    await m.locator('.modal').getByText('ค่าเดิมและค่าที่ขอแก้ไข').waitFor();
+    check(await m.locator('.modal').getByText('โอนเงินเข้าบัญชีโรงเรียน (KTB-20261121-009)').isVisible(), 'ผู้อำนวยการเห็นค่าเดิมและค่าใหม่ก่อนอนุมัติการแก้ไข');
+    await shot(m, '28-mobile-correction-approval');
+    await m.locator('.modal').getByRole('button', { name: 'อนุมัติ', exact: true }).click();
+    await toast(m, 'อนุมัติคำขอเรียบร้อยแล้ว');
+    await m.locator('.data-table tbody tr', { hasText: 'ยกเลิกใบเสร็จ เล่มที่ 1/2570 เลขที่ 1' }).getByRole('button', { name: 'พิจารณา' }).click();
+    await m.locator('.modal').getByLabel(/^ความเห็น/).fill('ให้ใช้การแก้ไขรายการแทน เพราะใบเสร็จจริงถูกต้อง');
+    await m.locator('.modal').getByRole('button', { name: 'ไม่อนุมัติ' }).click();
+    await toast(m, 'ไม่อนุมัติคำขอเรียบร้อยแล้ว');
     await m.getByText('ไม่มีคำขอที่รออนุมัติ').waitFor();
-    check(true, 'ผู้อำนวยการอนุมัติ 1 คำขอ และไม่อนุมัติ 1 คำขอ');
+    check(true, 'ผู้อำนวยการพิจารณาครบทั้ง 5 คำขอ');
     const forgedPay = await m.evaluate(() => App.api('payments.create', {}).then(() => 'allowed', (e) => e.code));
     check(forgedPay === 'FORBIDDEN', 'ผู้อำนวยการเรียกคำสั่งบันทึกรับเงินโดยตรง ถูก Server ปฏิเสธ');
     await m.getByRole('button', { name: 'เปิดเมนู' }).click();
@@ -482,6 +545,15 @@ async function main() {
     check(true, 'หลังอนุมัติ ยอดสุทธิของนักเรียนลดเหลือ 400.00 บาท');
     check(await noHorizontalScroll(m), 'มือถือ: รายการเรียกเก็บไม่มีแถบเลื่อนแนวนอน');
     await shot(m, '25-mobile-fee-detail');
+    await m.getByRole('button', { name: 'เปิดเมนู' }).click();
+    await m.locator('.nav-item', { hasText: 'เล่มใบเสร็จ' }).click();
+    await m.locator('.data-table tbody tr', { hasText: '1/2570' }).click();
+    await m.locator('.num-cell', { hasText: /^3$/ }).waitFor();
+    const mCell = async (n) => m.locator('.num-cell', { hasText: new RegExp('^' + n + '$') }).getAttribute('class');
+    check(/num-USED/.test(await mCell(1)) && /num-CANCELLED/.test(await mCell(3)) && /num-corrected/.test(await mCell(2)),
+      'หลังพิจารณา: เลขที่ 1 กลับเป็นใช้แล้ว เลขที่ 3 ยกเลิก เลขที่ 2 แสดงว่ามีการแก้ไขรายการ');
+    check(await noHorizontalScroll(m), 'มือถือ: ตารางเลขที่ใบเสร็จไม่มีแถบเลื่อนแนวนอน');
+    await shot(m, '29-mobile-receipt-grid');
     await mobile.context.close();
   } finally {
     await browser.close();

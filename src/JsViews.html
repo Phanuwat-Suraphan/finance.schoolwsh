@@ -242,13 +242,23 @@
           card);
       };
       if (role === 'ADMIN') return page(null);
-      // คำขอที่รออนุมัติ (ผู้อำนวยการต้องพิจารณา / เจ้าหน้าที่รอผล)
-      return App.api('approvals.list').then(function (res) {
+      // คำขอที่รออนุมัติ และสิ่งที่ต้องตรวจในทะเบียนคุมใบเสร็จ
+      return Promise.all([App.api('approvals.list'), App.api('receipts.books')]).then(function (res) {
         var label = role === 'DIRECTOR' ? 'คำขอรอพิจารณา' : 'คำขอรออนุมัติ';
-        var box = App.statCard(label, res.pendingCount + ' รายการ', res.pendingCount ? 'กดเพื่อดูรายละเอียด' : 'ไม่มีคำขอค้าง', res.pendingCount ? 'danger' : null);
+        var count = res[0].pendingCount;
+        var box = App.statCard(label, count + ' รายการ', count ? 'กดเพื่อดูรายละเอียด' : 'ไม่มีคำขอค้าง', count ? 'danger' : null);
         box.classList.add('clickable');
         box.addEventListener('click', function () { App.go('approvals'); });
-        return page(box);
+        var active = res[1].books.filter(function (b) { return b.status === 'ACTIVE'; })[0];
+        var alerts = [];
+        if (active && active.gaps.length) {
+          alerts.push(h('div', { class: 'alert alert-warning', text: 'เลขที่ใบเสร็จขาดช่วงในเล่มที่ ' + active.bookNo + ': ' + active.gaps.join(', ') + ' ต้องตรวจกับใบเสร็จจริง แล้วบันทึกรับเงินหรือยกเลิกเลขที่นั้น' }));
+        }
+        if (active && active.low) alerts.push(h('div', { class: 'alert alert-warning', text: 'ใบเสร็จเล่มที่ ' + active.bookNo + ' เหลือ ' + active.remaining + ' ฉบับ กรุณาเตรียมเล่มใหม่' }));
+        if (!active && role === 'FINANCE') alerts.push(h('div', { class: 'alert alert-info', text: 'ยังไม่มีเล่มใบเสร็จที่กำลังใช้ ลงทะเบียนและเปิดใช้เล่มก่อนรับเงิน' }));
+        var node = page(box);
+        if (alerts.length) node.insertBefore(h('div', { class: 'stack', style: { marginBottom: '16px' } }, alerts), node.children[1]);
+        return node;
       }, function () { return page(null); });
     },
   });

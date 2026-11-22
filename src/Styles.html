@@ -232,6 +232,21 @@ textarea.input { min-height: 84px; resize: vertical; }
 .section-title { margin: 0; font-size: 1.05rem; }
 .inline-list { margin: 0; padding-left: 18px; }
 
+/* ---------- ตารางเลขที่ใบเสร็จ ---------- */
+.number-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(54px, 1fr)); gap: 6px; }
+.num-cell { min-height: 40px; padding: 4px; border-radius: 6px; border: 1px solid var(--border); background: #fff; color: var(--muted);
+  font: inherit; font-size: .9rem; font-variant-numeric: tabular-nums; cursor: pointer; }
+.num-cell:hover, .num-cell:focus-visible { outline: 2px solid var(--blue); outline-offset: 1px; }
+.num-cell.num-USED, .badge.badge-num-USED { background: var(--blue-50); border-color: #C8DFF7; color: var(--blue-700); font-weight: 600; }
+.num-cell.num-CANCELLED, .badge.badge-num-CANCELLED { background: var(--danger-bg); border-color: #F2C9C4; color: var(--danger); }
+.num-cell.num-CANCELLED { text-decoration: line-through; }
+.num-cell.num-CANCEL_PENDING, .badge.badge-num-CANCEL_PENDING { background: var(--warning-bg); border-color: #F2DDB4; color: var(--warning); }
+.num-cell.num-GAP { border: 2px dashed var(--danger); color: var(--danger); font-weight: 700; }
+.badge.badge-num-GAP { background: #fff; border: 1px dashed var(--danger); color: var(--danger); }
+.badge.badge-num-UNUSED { background: #fff; border: 1px solid var(--border); color: var(--muted); }
+.num-cell.num-CLOSED_UNUSED, .badge.badge-num-CLOSED_UNUSED { background: #EEF1F5; color: #8A97A8; }
+.num-cell.num-corrected { box-shadow: inset 0 -3px 0 var(--warning); }
+
 /* ---------- แจ้งเตือน (toast) ---------- */
 /* พื้นที่ว่างรอบข้อความไม่บังการคลิก และคลิกที่ข้อความเพื่อปิดได้ */
 .toast-root { position: fixed; right: 20px; bottom: 20px; z-index: 80; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); pointer-events: none; }

@@ -53,6 +53,16 @@
           h('tr', null, h('th', { text: 'เหตุผลของผู้ขอ' }), h('td', { text: r.reason })),
           r.referenceDoc ? h('tr', null, h('th', { text: 'เอกสารอ้างอิง' }), h('td', { text: r.referenceDoc })) : null,
           h('tr', null, h('th', { text: 'ผู้ขอ' }), h('td', { text: r.requestedByName + ' · ' + App.fmt.datetime(r.createdAt) })))),
+        r.details && r.details.length ? h('div', null,
+          h('h3', { style: { margin: '14px 0 6px' }, text: 'ค่าเดิมและค่าที่ขอแก้ไข' }),
+          App.table({
+            rows: r.details,
+            columns: [
+              { label: 'ข้อมูล', render: function (x) { return h('span', { class: x.changed ? 'strong' : '', text: x.label }); } },
+              { label: 'ค่าเดิม', key: 'before' },
+              { label: 'ค่าใหม่', render: function (x) { return h('span', { class: x.changed ? 'strong text-danger' : 'muted', text: x.after }); } },
+            ],
+          })) : null,
         h('div', { class: 'alert alert-info', style: { margin: '12px 0' },
           text: 'ตรวจเหตุผลและเอกสารอ้างอิงก่อนอนุมัติ ระบบจะตรวจยอดเงินล่าสุดอีกครั้งตอนอนุมัติ ถ้ายอดเปลี่ยนไปแล้วจะอนุมัติไม่ได้' }),
         note.wrap,
@@ -114,7 +124,7 @@
         ];
         return h('div', null,
           App.pageHead('คำขออนุมัติ', data.canDecide
-            ? 'คำขอลดหย่อน ยกเว้น และยกเลิกรายการเรียกเก็บ ที่รอผู้อำนวยการพิจารณา (รายการเก่าอยู่บนสุด)'
+            ? 'คำขอที่รอผู้อำนวยการพิจารณา: ลดหย่อน/ยกเว้น ยกเลิกรายการเรียกเก็บ ยกเลิกเลขที่หรือใบเสร็จ แก้ไขรายการรับเงิน และปิดเล่มใบเสร็จ (รายการเก่าอยู่บนสุด)'
             : 'ติดตามผลคำขอที่ยื่นไว้ ระหว่างรออนุมัติ ยอดเงินเดิมยังมีผลตามเดิม'),
           h('div', { class: 'tabs', role: 'group', 'aria-label': 'ตัวกรองคำขอ' },
             tab('PENDING', 'รออนุมัติ (' + data.pendingCount + ')'),

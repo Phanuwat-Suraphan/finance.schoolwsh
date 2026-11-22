@@ -440,6 +440,7 @@
         var payments = App.table({
           rows: d.payments,
           empty: 'ยังไม่มีการรับเงิน',
+          onRowClick: function (p) { App.openPaymentDetail(p.paymentId); },
           columns: [
             { label: 'วันที่', className: 'nowrap', render: function (p) { return App.fmt.date(p.date); } },
             { label: 'ใบเสร็จ', className: 'nowrap', render: function (p) { return 'เล่ม ' + p.bookNo + ' เลขที่ ' + p.receiptNo; } },
@@ -449,7 +450,15 @@
               return h('ul', { class: 'inline-list small' }, p.allocations.map(function (al) { return h('li', { text: al.label + ' ' + formatSatang_(al.amountSatang) }); }));
             } },
             { label: 'ผู้รับเงิน', key: 'receivedByName' },
-            { label: 'สถานะ', render: function (p) { return App.badge(p.statusLabel, App.KIND.ACTIVE[p.status]); } },
+            { label: 'สถานะ', render: function (p) {
+              return [App.badge(p.statusLabel, App.KIND.ACTIVE[p.status]),
+                p.pendingRequest ? App.badge('รออนุมัติ: ' + p.pendingRequest.typeLabel, 'warning') : null,
+                p.status !== 'ACTIVE' && p.voidReason ? h('div', { class: 'muted small', text: p.voidReason }) : null,
+                p.replacesPaymentId ? h('div', { class: 'muted small', text: 'แก้ไขแทนรายการที่บันทึกผิด' }) : null];
+            } },
+            { label: 'จัดการ', className: 'actions', render: function (p) {
+              return button(isFinance() && p.status === 'ACTIVE' && !p.pendingRequest ? 'รายละเอียด / แก้ไข' : 'รายละเอียด', 'secondary btn-sm', function () { App.openPaymentDetail(p.paymentId); });
+            } },
           ],
         });
 
