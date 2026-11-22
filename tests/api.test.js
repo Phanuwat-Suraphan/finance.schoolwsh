@@ -59,6 +59,12 @@ const EXPECTED = {
   'payments.context': ['FINANCE'],
   'payments.create': ['FINANCE'],
   'payments.list': ['FINANCE', 'DIRECTOR'],
+  'receipts.book': ['FINANCE', 'DIRECTOR'],
+  'receipts.requestCancelNumber': ['FINANCE'],
+  'receipts.requestCloseBook': ['FINANCE'],
+  'payments.get': ['FINANCE', 'DIRECTOR'],
+  'payments.requestVoid': ['FINANCE'],
+  'payments.requestCorrection': ['FINANCE'],
 };
 const PUBLIC = ['auth.login', 'auth.loginGoogle'];
 

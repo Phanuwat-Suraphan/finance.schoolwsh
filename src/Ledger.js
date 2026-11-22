@@ -185,6 +185,11 @@ function paymentDto_(p, lc, labels, names) {
     status: p.Status,
     statusLabel: STATUS_LABELS.PAYMENT[p.Status] || p.Status,
     voidReason: p.VoidReason,
+    voidedAt: p.VoidedAt,
+    voidedBy: displayNameOf_(p.VoidedBy, names),
+    replacesPaymentId: p.ReplacesPaymentId,
+    replacedByPaymentId: p.ReplacedByPaymentId,
+    entryId: p.ReceiptEntryId,
     createdBy: displayNameOf_(p.CreatedBy, names),
     createdAt: p.CreatedAt,
     allocations: lc.allocations
@@ -257,7 +262,11 @@ function ledgerStudent_(ctx, payload) {
   const pendingByRef = pendingRequestsByRef_();
   assessments.forEach(function (a) { a.pendingRequest = pendingByRef[a.assessmentId] || null; });
   const payments = dbFind_(SHEETS.PAYMENTS, function (p) { return p.StudentId === id; })
-    .map(function (p) { return paymentDto_(p, lc, labels, names); })
+    .map(function (p) {
+      const dto = paymentDto_(p, lc, labels, names);
+      dto.pendingRequest = pendingByRef[p.PaymentId] || null;
+      return dto;
+    })
     .sort(comparePaymentsDesc_);
   const adjustments = lc.adjustments
     .filter(function (a) { return a.StudentId === id; })

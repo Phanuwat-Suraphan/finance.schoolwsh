@@ -26,8 +26,8 @@ const APP = Object.freeze({
   NAME: 'ระบบบริหารจัดเก็บเงินบำรุงการศึกษา',
   SCHOOL_NAME: 'โรงเรียนวัดเสาหิน',
   PROVINCE: 'เชียงใหม่',
-  VERSION: '0.4.0',
-  RELEASE: 'ระยะที่ 4: ระบบเรียกเก็บและรับชำระ',
+  VERSION: '0.5.0',
+  RELEASE: 'ระยะที่ 5: ทะเบียนคุมใบเสร็จรับเงิน',
   SCHEMA_VERSION: 1,
   TIMEZONE: 'Asia/Bangkok',
 });
@@ -98,7 +98,8 @@ const STATUS = Object.freeze({
   PAYMENT: Object.freeze({ ACTIVE: 'ACTIVE', VOIDED: 'VOIDED', REPLACED: 'REPLACED' }),
   ALLOCATION: Object.freeze({ ACTIVE: 'ACTIVE', VOIDED: 'VOIDED' }),
   BOOK: Object.freeze({ REGISTERED: 'REGISTERED', ACTIVE: 'ACTIVE', FULL: 'FULL', CLOSED: 'CLOSED' }),
-  RECEIPT_ENTRY: Object.freeze({ USED: 'USED', CANCEL_PENDING: 'CANCEL_PENDING', CANCELLED: 'CANCELLED' }),
+  // RELEASED = คำขอยกเลิกเลขที่ (ยังไม่บันทึกรับเงิน) ไม่ได้รับอนุมัติหรือถูกถอน เลขที่นั้นกลับมาใช้ได้ (แถวเดิมเก็บไว้เป็นประวัติ)
+  RECEIPT_ENTRY: Object.freeze({ USED: 'USED', CANCEL_PENDING: 'CANCEL_PENDING', CANCELLED: 'CANCELLED', RELEASED: 'RELEASED' }),
   CANCEL_TYPE: Object.freeze({ SPOILED: 'SPOILED', VOID_PAYMENT: 'VOID_PAYMENT' }),
   DECISION: Object.freeze({ PENDING: 'PENDING', APPROVED: 'APPROVED', REJECTED: 'REJECTED', WITHDRAWN: 'WITHDRAWN' }),
   REQUEST_TYPE: Object.freeze({
@@ -124,7 +125,7 @@ const STATUS_LABELS = Object.freeze({
   PAYMENT: { ACTIVE: 'มีผล', VOIDED: 'ยกเลิกใบเสร็จ', REPLACED: 'ถูกแทนด้วยรายการแก้ไข' },
   ALLOCATION: { ACTIVE: 'มีผล', VOIDED: 'ยกเลิก' },
   BOOK: { REGISTERED: 'ลงทะเบียนแล้ว', ACTIVE: 'กำลังใช้', FULL: 'ใช้ครบเล่ม', CLOSED: 'ปิดเล่ม' },
-  RECEIPT_ENTRY: { USED: 'ใช้แล้ว', CANCEL_PENDING: 'รออนุมัติยกเลิก', CANCELLED: 'ยกเลิก' },
+  RECEIPT_ENTRY: { USED: 'ใช้แล้ว', CANCEL_PENDING: 'รออนุมัติยกเลิก', CANCELLED: 'ยกเลิก', RELEASED: 'คืนเลขที่ (คำขอยกเลิกไม่ผ่าน)' },
   CANCEL_TYPE: { SPOILED: 'เขียนผิดหรือชำรุด (ยังไม่บันทึกรับเงิน)', VOID_PAYMENT: 'ยกเลิกใบเสร็จที่บันทึกรับเงินแล้ว' },
   DECISION: { PENDING: 'รออนุมัติ', APPROVED: 'อนุมัติ', REJECTED: 'ไม่อนุมัติ', WITHDRAWN: 'ถอนคำขอ' },
   REQUEST_TYPE: {
@@ -517,13 +518,17 @@ const SCHEMA = Object.freeze({
       ['BookId', 'text', 'รหัสเล่มใบเสร็จ'],
       ['BookNo', 'text', 'เลขเล่ม'],
       ['ReceiptNo', 'int', 'เลขที่ใบเสร็จ'],
-      ['Status', 'enum', 'USED ใช้แล้ว / CANCEL_PENDING รออนุมัติยกเลิก / CANCELLED ยกเลิก', STATUS.RECEIPT_ENTRY],
+      ['Status', 'enum', 'USED ใช้แล้ว / CANCEL_PENDING รออนุมัติยกเลิก / CANCELLED ยกเลิก / RELEASED คืนเลขที่ (คำขอยกเลิกไม่ผ่าน)', STATUS.RECEIPT_ENTRY],
       ['PaymentId', 'text', 'รหัสการรับเงินที่ผูกอยู่ (ว่าง = ยกเลิกก่อนบันทึกรับเงิน)'],
       ['ReceiptDate', 'date', 'วันที่ในใบเสร็จ'],
       ['Amount', 'money', 'จำนวนเงินในใบเสร็จ (บาท)'],
       ['StudentId', 'text', 'รหัสนักเรียนในระบบ'],
     ].concat(STD_CREATED_COLUMNS_, STD_UPDATED_COLUMNS_),
-    unique: [{ cols: ['BookId', 'ReceiptNo'], message: 'เลขที่ใบเสร็จนี้ถูกบันทึกในทะเบียนคุมแล้ว ใช้ซ้ำไม่ได้' }],
+    unique: [{
+      cols: ['BookId', 'ReceiptNo'],
+      skipStatus: [STATUS.RECEIPT_ENTRY.RELEASED],
+      message: 'เลขที่ใบเสร็จนี้ถูกบันทึกในทะเบียนคุมแล้ว ใช้ซ้ำไม่ได้',
+    }],
     // PaymentId/ReceiptDate/Amount/StudentId เปลี่ยนได้เฉพาะกรณี "แก้ไขรายการบันทึกผิด" ที่ได้รับอนุมัติ
     mutable: ['Status', 'PaymentId', 'ReceiptDate', 'Amount', 'StudentId'],
   },

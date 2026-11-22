@@ -90,10 +90,16 @@ function apiActions_() {
     'receipts.registerBook': { roles: FINANCE, write: true, handler: receiptsRegisterBook_ },
     'receipts.updateBook': { roles: FINANCE, write: true, handler: receiptsUpdateBook_ },
     'receipts.activateBook': { roles: FINANCE, write: true, handler: receiptsActivateBook_ },
+    'receipts.book': { roles: FINANCE_VIEW, write: false, handler: receiptsBook_ },
+    'receipts.requestCancelNumber': { roles: FINANCE, write: true, handler: receiptsRequestCancelNumber_ },
+    'receipts.requestCloseBook': { roles: FINANCE, write: true, handler: receiptsRequestCloseBook_ },
     // รับชำระเงิน
     'payments.context': { roles: FINANCE, write: false, handler: paymentsContext_ },
     'payments.create': { roles: FINANCE, write: true, handler: paymentsCreate_ },
     'payments.list': { roles: FINANCE_VIEW, write: false, handler: paymentsList_ },
+    'payments.get': { roles: FINANCE_VIEW, write: false, handler: paymentsGet_ },
+    'payments.requestVoid': { roles: FINANCE, write: true, handler: paymentsRequestVoid_ },
+    'payments.requestCorrection': { roles: FINANCE, write: true, handler: paymentsRequestCorrection_ },
   };
   Object.keys(API_ACTIONS_).forEach(function (k) { Object.freeze(API_ACTIONS_[k]); });
   Object.freeze(API_ACTIONS_);

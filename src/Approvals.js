@@ -9,7 +9,8 @@
  *  - ระหว่างรออนุมัติ ข้อมูลเดิมยังมีผลตามเดิม
  *  - ผู้ยื่นคำขออนุมัติคำขอของตนเองไม่ได้ (ตรวจที่ Server)
  *  - ปิด "ต้องอนุมัติ" ในหน้าตั้งค่าแล้ว คำขอประเภทนั้นจะมีผลทันที และบันทึกผู้ทำรายการไว้ในประวัติ
- *  - ประเภทคำขอใหม่ (ระยะที่ 5) เพิ่มตัวดำเนินการใน approvalHandlers_() ที่เดียว
+ *  - ตัวดำเนินการของแต่ละประเภทอยู่ใน approvalHandlers_() ที่เดียว
+ *    approve = ทำตามคำขอ (ตรวจเงื่อนไขใหม่) / release = คืนสิ่งที่กันไว้เมื่อไม่อนุมัติหรือถอนคำขอ
  * ============================================================================
  */
 
@@ -18,20 +19,36 @@ function approvalRequired_(type) {
   return getSetting_('APPROVAL_' + type) === true;
 }
 
-/** ตัวดำเนินการเมื่อคำขอได้รับอนุมัติ (ตรวจเงื่อนไขใหม่ทุกครั้ง ถ้าไม่ผ่านจะ error และคำขอยังรออนุมัติ) */
+/**
+ * ตัวดำเนินการของคำขอแต่ละประเภท
+ *  approve(data, request, actor, note)          อนุมัติ: ตรวจเงื่อนไขใหม่ทุกครั้ง ถ้าไม่ผ่านจะ error และคำขอยังรออนุมัติ
+ *  release(data, request, actor, outcome, note) ไม่อนุมัติ/ถอนคำขอ: คืนสิ่งที่กันไว้ระหว่างรอ (ถ้ามี)
+ */
 function approvalHandlers_() {
   return {
-    FEE_ADJUSTMENT: function (data, request, actor) {
-      applyFeeAdjustment_(data, request.CreatedBy, actor.username, request.RequestId, actor);
+    FEE_ADJUSTMENT: {
+      approve: function (data, request, actor) { applyFeeAdjustment_(data, request.CreatedBy, actor.username, request.RequestId, actor); },
     },
-    ASSESSMENT_CANCEL: function (data, request, actor) {
-      applyAssessmentCancel_(data, request.CreatedBy, request.RequestId, actor);
+    ASSESSMENT_CANCEL: {
+      approve: function (data, request, actor) { applyAssessmentCancel_(data, request.CreatedBy, request.RequestId, actor); },
+    },
+    RECEIPT_CANCEL: {
+      approve: function (data, request, actor, note) { applyReceiptCancel_(data, request.RequestId, actor, note); },
+      release: function (data, request, actor, outcome, note) { releaseReceiptCancel_(data, actor, outcome, note); },
+    },
+    PAYMENT_CORRECTION: {
+      approve: function (data, request, actor) { applyPaymentCorrection_(data, request.Reason, request.RequestId, actor); },
+    },
+    BOOK_CLOSE: {
+      approve: function (data, request, actor) { applyBookClose_(data, actor); },
     },
   };
 }
 
-function createApprovalRequest_(type, refId, studentId, summary, data, reason, actor) {
+/** presetId = รหัสที่จองไว้ด้วย dbReserveId_() เมื่อรายการอื่นต้องอ้างรหัสคำขอตั้งแต่บันทึกครั้งแรก */
+function createApprovalRequest_(type, refId, studentId, summary, data, reason, actor, presetId) {
   return dbInsert_(SHEETS.APPROVAL_REQUESTS, {
+    RequestId: presetId || '',
     RequestType: type,
     RefId: refId,
     StudentId: studentId || '',
@@ -77,6 +94,9 @@ function approvalDto_(r, students, names) {
     reason: r.Reason,
     amountSatang: typeof data.amountSatang === 'number' ? data.amountSatang : null,
     referenceDoc: typeof data.referenceDoc === 'string' ? data.referenceDoc : '',
+    details: Array.isArray(data.display) ? data.display.map(function (d) {
+      return { label: String(d.label), before: String(d.before), after: String(d.after), changed: d.changed === true };
+    }) : [],
     status: r.Status,
     statusLabel: STATUS_LABELS.DECISION[r.Status] || r.Status,
     requestedBy: r.CreatedBy,
@@ -133,12 +153,11 @@ function approvalsDecide_(ctx, payload) {
     throw appError_(ERROR_CODES.FORBIDDEN, 'ผู้ยื่นคำขอพิจารณาคำขอของตนเองไม่ได้');
   }
   const actor = actorFromCtx_(ctx);
-  if (approve) {
-    const handler = approvalHandlers_()[r.RequestType];
-    if (!handler) throw appError_(ERROR_CODES.CONFLICT, 'ระบบยังไม่รองรับการอนุมัติคำขอประเภทนี้');
-    handler(parseRequestData_(r), r, actor);
-  }
+  const handler = approvalHandlers_()[r.RequestType];
+  if (!handler) throw appError_(ERROR_CODES.CONFLICT, 'ระบบยังไม่รองรับการพิจารณาคำขอประเภทนี้');
   const status = approve ? STATUS.DECISION.APPROVED : STATUS.DECISION.REJECTED;
+  if (approve) handler.approve(parseRequestData_(r), r, actor, note);
+  else if (handler.release) handler.release(parseRequestData_(r), r, actor, status, note);
   dbUpdate_(SHEETS.APPROVAL_REQUESTS, r.RequestId, {
     Status: status,
     DecidedBy: ctx.username,
@@ -157,6 +176,8 @@ function approvalsWithdraw_(ctx, payload) {
   const r = requirePendingRequest_(payload.requestId);
   if (r.CreatedBy !== ctx.username) throw appError_(ERROR_CODES.FORBIDDEN, 'ถอนได้เฉพาะคำขอที่ตนเองยื่น');
   const note = requireText_(payload.note, 'เหตุผลการถอนคำขอ', { optional: true, max: 300 });
+  const handler = approvalHandlers_()[r.RequestType];
+  if (handler && handler.release) handler.release(parseRequestData_(r), r, actorFromCtx_(ctx), STATUS.DECISION.WITHDRAWN, note || 'ผู้ยื่นถอนคำขอ');
   dbUpdate_(SHEETS.APPROVAL_REQUESTS, r.RequestId, {
     Status: STATUS.DECISION.WITHDRAWN,
     DecidedBy: ctx.username,
