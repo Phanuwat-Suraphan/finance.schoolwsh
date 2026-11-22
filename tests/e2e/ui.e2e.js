@@ -473,6 +473,21 @@ async function main() {
       /num-CANCEL_PENDING/.test(await cellClass(3)) && /num-USED/.test(await cellClass(4)) && /num-UNUSED/.test(await cellClass(5)),
       'ตารางเลขที่แสดงสถานะทุกใบ: 1 และ 3 รออนุมัติยกเลิก, 2 และ 4 ใช้แล้ว, 5 ยังไม่ใช้');
     await shot(p, '27-receipt-grid');
+
+    // ------------------------------------------------------------------ ระยะที่ 6: ยอดค้างชำระ
+    await nav(p, 'ยอดค้างชำระ');
+    await p.locator('.stat', { hasText: 'ยอดค้างทั้งหมด' }).getByText('1,000.00 บาท').waitFor();
+    check(true, 'ยอดค้างทั้งหมด 1,000.00 บาท (ระหว่างรออนุมัติ ยอดเดิมยังมีผล)');
+    await p.locator('.data-table tbody tr', { hasText: 'ป.3' }).first().click();
+    await p.waitForTimeout(400);
+    check((await p.locator('.card', { hasText: 'รายชื่อนักเรียน' }).locator('.data-table tbody tr').count()) === 1, 'คลิกชั้น ป.3 แล้วรายชื่อเหลือเฉพาะชั้นนั้น');
+    await p.getByLabel('ชั้น', { exact: true }).selectOption('');
+    await shot(p, '30-arrears');
+    await p.emulateMedia({ media: 'print' });
+    check(await p.locator('.print-head').isVisible() && !(await p.locator('.sidebar').isVisible()) && !(await p.getByRole('button', { name: 'พิมพ์' }).isVisible()),
+      'หน้าพิมพ์ยอดค้าง: มีหัวรายงานชื่อโรงเรียนและวันที่ ซ่อนเมนูและปุ่ม');
+    await shot(p, '30-arrears-print');
+    await p.emulateMedia({ media: 'screen' });
     await desk.context.close();
 
     // ------------------------------------------------------------------ มือถือ: ผู้อำนวยการ
@@ -554,6 +569,12 @@ async function main() {
       'หลังพิจารณา: เลขที่ 1 กลับเป็นใช้แล้ว เลขที่ 3 ยกเลิก เลขที่ 2 แสดงว่ามีการแก้ไขรายการ');
     check(await noHorizontalScroll(m), 'มือถือ: ตารางเลขที่ใบเสร็จไม่มีแถบเลื่อนแนวนอน');
     await shot(m, '29-mobile-receipt-grid');
+    await m.getByRole('button', { name: 'เปิดเมนู' }).click();
+    await m.locator('.nav-item', { hasText: 'ยอดค้างชำระ' }).click();
+    await m.locator('.stat', { hasText: 'ยอดค้างทั้งหมด' }).getByText('900.00 บาท').waitFor();
+    check(true, 'หลังผู้อำนวยการพิจารณา ยอดค้างทั้งหมดเหลือ 900.00 บาท (อนุมัติลดหย่อน 100 บาท)');
+    check(await noHorizontalScroll(m), 'มือถือ: หน้ายอดค้างชำระไม่มีแถบเลื่อนแนวนอน');
+    await shot(m, '31-mobile-arrears');
     await mobile.context.close();
   } finally {
     await browser.close();

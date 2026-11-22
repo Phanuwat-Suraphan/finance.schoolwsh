@@ -1,0 +1,210 @@
+<script>
+/* ==========================================================================
+   JsArrears — ยอดค้างชำระ รายชั้น รายห้อง รายนักเรียน และยอดค้างสะสมจากปีก่อน (ระยะที่ 6)
+   ตัวเลขทั้งหมดคำนวณที่ Server จากข้อมูลจริงทุกครั้ง หน้านี้กรองและจัดรูปแบบเท่านั้น
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var button = App.button;
+  var money = App.fmt.money;
+  var OTHER = '__OTHER__';
+
+  App.state.arrearsYear = null;
+  App.state.arrearsFilter = { grade: '', room: '', owing: true, overdue: false, q: '' };
+
+  function pct(paid, net) {
+    return net > 0 ? (Math.round(paid * 1000 / net) / 10).toFixed(1) + '%' : '–';
+  }
+
+  function amount(satang, strong) {
+    return h('span', { class: satang > 0 && strong ? 'text-danger strong' : (satang > 0 ? '' : 'muted'), text: formatSatang_(satang) });
+  }
+
+  App.defineRoute('arrears', {
+    title: 'ยอดค้างชำระ',
+    roles: ['FINANCE', 'DIRECTOR'],
+    menu: { group: 'finance', label: 'ยอดค้างชำระ', icon: 'alertCircle', order: 25 },
+    render: function (params) {
+      var year = params.year || App.state.arrearsYear || App.state.me.school.currentAcademicYear;
+      return Promise.all([App.api('arrears.summary', { year: year }), App.api('years.list')]).then(function (res) {
+        var data = res[0];
+        var years = res[1];
+        App.state.arrearsYear = data.year;
+        var f = App.state.arrearsFilter;
+        var s = data.school;
+        var hasLater = s.laterSatang > 0;
+
+        // ---------------------------------------------------------------- สรุปตามชั้นและห้อง
+        var summaryRows = [];
+        data.grades.forEach(function (g) {
+          summaryRows.push({ kind: 'grade', label: g.gradeLevel, grade: g.gradeLevel, room: '', fig: g });
+          if (g.rooms.length > 1) {
+            g.rooms.forEach(function (r) { summaryRows.push({ kind: 'room', label: 'ห้อง ' + (r.room || '–'), grade: g.gradeLevel, room: r.room, fig: r }); });
+          }
+        });
+        summaryRows.push({ kind: 'total', label: 'รวมนักเรียนปีการศึกษา ' + data.year, fig: data.enrolled });
+        if (data.other.students) {
+          summaryRows.push({ kind: 'other', label: 'ไม่มีชั้นเรียนในปีนี้ (ย้ายออก/จบการศึกษา)', grade: OTHER, fig: data.other });
+          summaryRows.push({ kind: 'school', label: 'รวมทั้งโรงเรียน', fig: s });
+        }
+        var summaryColumns = [
+          { label: 'ชั้น / ห้อง', render: function (r) {
+            var cls = r.kind === 'room' ? 'small' : (r.kind === 'grade' || r.kind === 'other' ? 'strong' : 'strong');
+            return h('span', { class: cls, style: r.kind === 'room' ? { paddingLeft: '18px' } : null, text: r.label });
+          } },
+          { label: 'นักเรียน', className: 'num', render: function (r) { return String(r.fig.students); } },
+          { label: 'ค้าง (คน)', className: 'num', render: function (r) { return String(r.fig.owingStudents); } },
+          { label: 'เรียกเก็บสุทธิ ' + data.year, className: 'num', render: function (r) { return formatSatang_(r.fig.netSatang); } },
+          { label: 'ชำระแล้ว', className: 'num', render: function (r) {
+            return [h('div', { text: formatSatang_(r.fig.paidSatang) }), h('div', { class: 'muted small', text: pct(r.fig.paidSatang, r.fig.netSatang) })];
+          } },
+          { label: 'ค้างปี ' + data.year, className: 'num', render: function (r) { return amount(r.fig.currentSatang); } },
+          { label: 'ค้างจากปีก่อน', className: 'num', render: function (r) { return amount(r.fig.priorSatang); } },
+        ];
+        if (hasLater) summaryColumns.push({ label: 'ปีถัดไป', className: 'num', render: function (r) { return amount(r.fig.laterSatang); } });
+        summaryColumns.push(
+          { label: 'รวมค้าง', className: 'num', render: function (r) { return amount(r.fig.totalSatang, true); } },
+          { label: 'เลยกำหนด', className: 'num', render: function (r) { return amount(r.fig.overdueSatang); } });
+
+        // ---------------------------------------------------------------- รายชื่อนักเรียน
+        var gradeOptions = [{ value: '', label: 'ทุกชั้น' }].concat(data.grades.map(function (g) { return { value: g.gradeLevel, label: g.gradeLevel }; }));
+        if (data.other.students) gradeOptions.push({ value: OTHER, label: 'ไม่มีชั้นเรียนในปีนี้' });
+        if (!gradeOptions.some(function (o) { return o.value === f.grade; })) { f.grade = ''; f.room = ''; }
+        var gradeSel = App.field({ label: 'ชั้น', type: 'select', options: gradeOptions, value: f.grade });
+        var roomSel = App.field({ label: 'ห้อง', type: 'select' });
+        var search = App.field({ label: 'ค้นหา', placeholder: 'ชื่อ หรือเลขประจำตัว', value: f.q });
+        search.wrap.classList.add('filter-wide');
+        var owing = App.field({ label: 'เฉพาะผู้ที่มียอดค้าง', type: 'checkbox', value: f.owing });
+        var overdue = App.field({ label: 'เฉพาะที่เลยกำหนด', type: 'checkbox', value: f.overdue });
+        var listInfo = h('div', { class: 'toolbar', style: { gap: '8px', marginBottom: '12px' } });
+        var list = h('div');
+        var printFilter = h('div');
+
+        function fillRooms() {
+          var g = data.grades.filter(function (x) { return x.gradeLevel === f.grade; })[0];
+          var rooms = g ? g.rooms.map(function (r) { return r.room; }) : [];
+          clear(roomSel.input);
+          roomSel.input.appendChild(h('option', { value: '', text: g ? 'ทุกห้อง' : '(เลือกชั้นก่อน)' }));
+          rooms.forEach(function (r) { roomSel.input.appendChild(h('option', { value: r, text: 'ห้อง ' + (r || '–') })); });
+          if (rooms.indexOf(f.room) === -1) f.room = '';
+          roomSel.input.value = f.room;
+          roomSel.input.disabled = !g || rooms.length < 2;
+        }
+
+        function filterText() {
+          var parts = [];
+          parts.push(f.grade === OTHER ? 'นักเรียนที่ไม่มีชั้นเรียนในปีนี้' : (f.grade ? 'ชั้น ' + f.grade + (f.room ? '/' + f.room : '') : 'ทุกชั้น'));
+          if (f.owing) parts.push('เฉพาะผู้ที่มียอดค้าง');
+          if (f.overdue) parts.push('เฉพาะที่เลยกำหนด');
+          if (f.q.trim()) parts.push('ค้นหา "' + f.q.trim() + '"');
+          return parts.join(' · ');
+        }
+
+        function draw() {
+          var q = f.q.trim().toLowerCase().replace(/\s+/g, '');
+          var rows = data.rows.filter(function (r) {
+            if (f.grade === OTHER && r.enrolled) return false;
+            if (f.grade && f.grade !== OTHER && r.gradeLevel !== f.grade) return false;
+            if (f.room && r.room !== f.room) return false;
+            if (f.owing && r.totalSatang <= 0) return false;
+            if (f.overdue && r.overdueSatang <= 0) return false;
+            if (q && (r.studentNo + r.fullName).toLowerCase().replace(/\s+/g, '').indexOf(q) === -1) return false;
+            return true;
+          });
+          var sum = { current: 0, prior: 0, total: 0, overdue: 0 };
+          rows.forEach(function (r) { sum.current += r.currentSatang; sum.prior += r.priorSatang; sum.total += r.totalSatang; sum.overdue += r.overdueSatang; });
+          clear(listInfo);
+          listInfo.appendChild(App.badge(rows.length + ' คน รวมค้าง ' + money(sum.total), sum.total ? 'danger' : 'success'));
+          listInfo.appendChild(App.badge('ปีนี้ ' + money(sum.current), 'FINANCE'));
+          if (sum.prior) listInfo.appendChild(App.badge('จากปีก่อน ' + money(sum.prior), 'warning'));
+          if (sum.overdue) listInfo.appendChild(App.badge('เลยกำหนด ' + money(sum.overdue), 'danger'));
+          printFilter.textContent = 'รายชื่อ: ' + filterText() + ' · ' + rows.length + ' คน รวมค้าง ' + money(sum.total);
+          var columns = [
+            { label: 'ชั้น/ห้อง', className: 'nowrap', render: function (r) { return r.enrolled ? r.classLabel : '–'; } },
+            { label: 'เลขที่', render: function (r) { return r.classNo === null ? '–' : String(r.classNo); } },
+            { label: 'เลขประจำตัว', render: function (r) { return h('span', { class: 'mono', text: r.studentNo }); } },
+            { label: 'ชื่อ-นามสกุล', render: function (r) {
+              var note = !r.enrolled ? r.statusLabel : (r.enrollStatus !== 'STUDYING' ? r.enrollStatusLabel : '');
+              return [h('div', { text: r.fullName }), note ? App.badge(note, 'muted') : null];
+            } },
+            { label: 'ค้างปีนี้', className: 'num', render: function (r) { return amount(r.currentSatang); } },
+            { label: 'ค้างจากปีก่อน', className: 'num', render: function (r) {
+              var prior = r.years.filter(function (y) { return y.year < data.year; });
+              return [amount(r.priorSatang), prior.length ? h('div', { class: 'muted small', text: prior.map(function (y) { return y.year + ': ' + formatSatang_(y.satang); }).join(', ') }) : null];
+            } },
+          ];
+          if (hasLater) columns.push({ label: 'ปีถัดไป', className: 'num', render: function (r) { return amount(r.laterSatang); } });
+          columns.push(
+            { label: 'รวมค้าง', className: 'num', render: function (r) { return amount(r.totalSatang, true); } },
+            { label: 'เลยกำหนด', className: 'num', render: function (r) {
+              return [amount(r.overdueSatang), r.overdueSatang && r.oldestDue ? h('div', { class: 'muted small', text: 'ตั้งแต่ ' + App.fmt.date(r.oldestDue) }) : null];
+            } });
+          clear(list).appendChild(App.table({
+            rows: rows,
+            columns: columns,
+            onRowClick: function (r) { App.go('student-account', { studentId: r.studentId, back: 'arrears', backParams: { year: data.year } }); },
+            empty: f.owing ? 'ไม่มีนักเรียนที่ค้างชำระตามเงื่อนไขนี้' : 'ไม่พบนักเรียนตามเงื่อนไข',
+          }));
+        }
+
+        function setGroup(grade, room) {
+          f.grade = grade || '';
+          f.room = room || '';
+          gradeSel.input.value = f.grade;
+          fillRooms();
+          draw();
+          App.scrollToEl(listCard);
+        }
+        gradeSel.input.addEventListener('change', function () { f.grade = gradeSel.get(); f.room = ''; fillRooms(); draw(); });
+        roomSel.input.addEventListener('change', function () { f.room = roomSel.get(); draw(); });
+        search.input.addEventListener('input', function () { f.q = search.get(); draw(); });
+        owing.input.addEventListener('change', function () { f.owing = owing.get(); draw(); });
+        overdue.input.addEventListener('change', function () { f.overdue = overdue.get(); draw(); });
+        fillRooms();
+        draw();
+
+        var yearSel = App.field({ label: 'ปีการศึกษา', type: 'select', value: String(data.year),
+          options: years.map(function (y) { return { value: String(y.year), label: y.label + (y.isCurrent ? ' (ปัจจุบัน)' : '') }; }) });
+        yearSel.input.addEventListener('change', function () { App.go('arrears', { year: Number(yearSel.input.value) }); });
+
+        var listCard = h('div', { class: 'card' },
+          h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'รายชื่อนักเรียน' })),
+          h('div', { class: 'card-body' },
+            h('div', { class: 'toolbar filter-bar' }, gradeSel.wrap, roomSel.wrap, search.wrap, owing.wrap, overdue.wrap),
+            listInfo, list));
+
+        var generated = App.fmt.datetime(data.generatedAt);
+        return h('div', { class: 'has-print-head' },
+          h('div', { class: 'print-only print-head' },
+            h('div', { class: 'strong', text: App.state.me.school.name }),
+            h('h1', { text: 'รายงานยอดค้างชำระเงินบำรุงการศึกษา ปีการศึกษา ' + data.year }),
+            h('div', { text: 'ข้อมูล ณ ' + generated + ' · ยอดค้างจากปีก่อน = รายการเรียกเก็บของปีการศึกษาก่อนหน้าที่ยังชำระไม่ครบ' }),
+            printFilter),
+          App.pageHead('ยอดค้างชำระ', 'ปีการศึกษา ' + data.year + ' · ข้อมูล ณ ' + generated + ' · คลิกชั้นหรือห้องเพื่อดูรายชื่อ คลิกชื่อเพื่อดูบัญชีนักเรียน',
+            [button('พิมพ์', 'secondary', function () { window.print(); }, 'printer')]),
+          h('div', { class: 'toolbar filter-bar no-print' }, yearSel.wrap),
+          h('div', { class: 'grid-cards' },
+            App.statCard('ยอดค้างทั้งหมด', money(s.totalSatang), s.owingStudents + ' คน' + (s.overdueSatang ? ' · เลยกำหนด ' + money(s.overdueSatang) : ''), s.totalSatang ? 'danger' : 'success'),
+            App.statCard('ค้างปีการศึกษา ' + data.year, money(s.currentSatang), 'ชำระแล้ว ' + pct(s.paidSatang, s.netSatang) + ' ของ ' + money(s.netSatang)),
+            App.statCard('ค้างจากปีก่อน', money(s.priorSatang), s.priorSatang ? 'ยอดค้างสะสมของปีการศึกษาก่อนหน้า' : 'ไม่มี'),
+            App.statCard('นักเรียนปีการศึกษา ' + data.year, data.enrolled.students + ' คน', 'ค้างชำระ ' + data.enrolled.owingStudents + ' คน')),
+          h('div', { class: 'stack' },
+            h('div', { class: 'card' },
+              h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'สรุปตามชั้นและห้อง' })),
+              h('div', { class: 'card-body' }, App.table({
+                rows: summaryRows,
+                columns: summaryColumns,
+                onRowClick: function (r) {
+                  if (r.kind === 'grade' || r.kind === 'room' || r.kind === 'other') setGroup(r.grade, r.room);
+                  else setGroup('', '');
+                },
+                empty: 'ยังไม่มีข้อมูลนักเรียนหรือรายการเรียกเก็บของปีการศึกษานี้',
+              }))),
+            listCard));
+      });
+    },
+  });
+})();
+</script>

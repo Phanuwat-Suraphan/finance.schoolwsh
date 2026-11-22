@@ -247,6 +247,11 @@ textarea.input { min-height: 84px; resize: vertical; }
 .num-cell.num-CLOSED_UNUSED, .badge.badge-num-CLOSED_UNUSED { background: #EEF1F5; color: #8A97A8; }
 .num-cell.num-corrected { box-shadow: inset 0 -3px 0 var(--warning); }
 
+/* ---------- พิมพ์รายงาน ---------- */
+.print-only { display: none; }
+.print-head { margin-bottom: 12px; line-height: 1.5; }
+.print-head h1 { font-size: 16pt; margin: 4px 0; }
+
 /* ---------- แจ้งเตือน (toast) ---------- */
 /* พื้นที่ว่างรอบข้อความไม่บังการคลิก และคลิกที่ข้อความเพื่อปิดได้ */
 .toast-root { position: fixed; right: 20px; bottom: 20px; z-index: 80; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); pointer-events: none; }
@@ -297,7 +302,15 @@ textarea.input { min-height: 84px; resize: vertical; }
 
 /* ---------- พิมพ์ ---------- */
 @media print {
-  .sidebar, .topbar, .toolbar, .btn, .toast-root, .busy-bar, .backdrop { display: none !important; }
+  @page { size: A4; margin: 12mm; }
+  .sidebar, .topbar, .toolbar, .btn, .toast-root, .busy-bar, .backdrop, .no-print { display: none !important; }
+  .has-print-head .page-head { display: none !important; }
+  .print-only { display: block; }
+  .data-table th, .data-table td { padding: 4px 6px; font-size: 10pt; }
+  .data-table tr { break-inside: avoid; }
+  .grid-cards { grid-template-columns: repeat(4, 1fr); gap: 6px; }
+  .stat { padding: 6px 8px; }
+  .stat-value { font-size: 12pt; }
   .shell { display: block; }
   body { background: #fff; }
   .card { box-shadow: none; border-color: #999; }
