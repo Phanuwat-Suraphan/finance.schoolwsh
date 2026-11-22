@@ -195,6 +195,41 @@ textarea.input { min-height: 84px; resize: vertical; }
 .kv th, .kv td { text-align: left; padding: 6px 8px; border-bottom: 1px solid #EDF1F6; vertical-align: top; word-break: break-word; }
 .kv th { color: var(--muted); font-weight: 600; width: 34%; }
 
+/* ---------- การเงิน ---------- */
+.num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.data-table th.num { text-align: right; }
+.strong { font-weight: 700; color: var(--navy-900); }
+.text-danger { color: var(--danger); }
+.text-success { color: var(--success); }
+.field-label { font-weight: 600; margin-bottom: 4px; }
+.check-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px 14px; padding: 6px 0; }
+.check-grid label { display: flex; align-items: center; gap: 8px; font-weight: 400; cursor: pointer; }
+.check-grid input { width: 18px; height: 18px; }
+.stat-sub { color: var(--muted); font-size: .85rem; margin-top: 2px; }
+.stat-danger .stat-value { color: var(--danger); }
+.stack > .card + .card { margin-top: 0; }
+.card.clickable { cursor: pointer; }
+.card.clickable:hover { border-color: var(--blue); }
+.stat-success .stat-value { color: var(--success); }
+.banner { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 14px 18px; }
+.banner .big { font-size: 1.35rem; font-weight: 700; color: var(--navy-900); }
+.banner .muted { margin-top: 2px; }
+.receipt-preview { border: 1px dashed #B9C6D6; border-radius: var(--radius-sm); padding: 12px 14px; background: #FBFCFE; }
+.receipt-preview h3 { margin: 0 0 8px; font-size: 1rem; }
+.receipt-line { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; }
+.receipt-total { display: flex; justify-content: space-between; gap: 12px; font-weight: 700; border-top: 1px solid var(--border); margin-top: 6px; padding-top: 8px; }
+.alloc-input { max-width: 150px; text-align: right; }
+.amount-input { font-size: 1.25rem; font-weight: 700; }
+.sum-line { padding: 8px 12px; border-radius: var(--radius-sm); background: var(--blue-50); }
+.sum-line.bad { background: var(--danger-bg); color: #8E2A1F; }
+.sum-line.good { background: var(--success-bg); color: #155F3D; }
+.confirm-box { display: flex; gap: 10px; align-items: flex-start; padding: 12px; border: 1px solid #F2DDB4; background: var(--warning-bg); border-radius: var(--radius-sm); cursor: pointer; line-height: 1.5; }
+.confirm-box input { width: 20px; height: 20px; margin-top: 2px; flex-shrink: 0; }
+.tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 14px; }
+.tabs .btn[aria-pressed="true"] { background: var(--navy); color: #fff; border-color: var(--navy); }
+.section-title { margin: 0; font-size: 1.05rem; }
+.inline-list { margin: 0; padding-left: 18px; }
+
 /* ---------- แจ้งเตือน (toast) ---------- */
 /* พื้นที่ว่างรอบข้อความไม่บังการคลิก และคลิกที่ข้อความเพื่อปิดได้ */
 .toast-root { position: fixed; right: 20px; bottom: 20px; z-index: 80; display: flex; flex-direction: column; gap: 8px; max-width: min(420px, calc(100vw - 32px)); pointer-events: none; }

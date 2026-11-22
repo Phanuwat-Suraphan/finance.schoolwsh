@@ -1,0 +1,505 @@
+<script>
+/* ==========================================================================
+   JsFees — อัตราเงินบำรุง รายการเรียกเก็บ ลดหย่อน/ยกเว้น และบัญชีนักเรียน (ระยะที่ 4)
+   ปุ่มที่ซ่อนตามบทบาทมีไว้เพื่อความสะดวกเท่านั้น ทุกคำสั่งตรวจสิทธิ์และเงื่อนไขซ้ำที่ Server
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var button = App.button;
+  var money = App.fmt.money;
+  var VIEW = ['FINANCE', 'DIRECTOR'];
+
+  App.state.feeYear = null;
+
+  function isFinance() { return App.state.me.user.role === 'FINANCE'; }
+  function isDirector() { return App.state.me.user.role === 'DIRECTOR'; }
+
+  function num(satang, strongWhenPositive) {
+    return h('span', { class: strongWhenPositive && satang > 0 ? 'text-danger strong' : '', text: formatSatang_(satang) });
+  }
+
+  function stateCell(a) {
+    return [
+      App.badge(a.stateLabel, App.KIND.PAY_STATE[a.state]),
+      a.pendingRequest ? h('div', { style: { marginTop: '4px' } }, App.badge('รออนุมัติ: ' + a.pendingRequest.typeLabel, 'warning')) : null,
+    ];
+  }
+
+  // ---------------------------------------------------------------------------
+  // ฟอร์มที่ใช้หลายหน้า
+  // ---------------------------------------------------------------------------
+
+  /** ขอลดหย่อนหรือยกเว้น (a = รายการเรียกเก็บ) */
+  App.openAdjustmentForm = function (a, who) {
+    App.formModal({
+      title: 'ลดหย่อน/ยกเว้น',
+      intro: h('div', { class: 'alert alert-info' },
+        h('div', { class: 'strong', text: (who ? who + ' · ' : '') + a.label }),
+        h('div', { text: 'ยอดคงเหลือ ' + money(a.outstandingSatang) }),
+        h('div', { class: 'small', text: 'ต้องมีเหตุผลและเอกสารอ้างอิง ถ้าโรงเรียนตั้งค่าให้ต้องอนุมัติ คำขอจะรอผู้อำนวยการพิจารณา และยอดเดิมยังมีผลระหว่างรอ' })),
+      fields: [
+        { key: 'type', label: 'ประเภท', type: 'select', required: true, value: 'DISCOUNT',
+          options: [{ value: 'DISCOUNT', label: 'ลดหย่อน (ระบุจำนวนเงิน)' }, { value: 'EXEMPTION', label: 'ยกเว้นยอดคงเหลือทั้งหมด' }] },
+        { key: 'amount', label: 'จำนวนเงินที่ลดหย่อน (บาท)', required: true, inputmode: 'decimal', placeholder: '0.00',
+          help: 'ไม่เกินยอดคงเหลือ ' + formatSatang_(a.outstandingSatang) + ' บาท' },
+        { key: 'reason', label: 'เหตุผล', type: 'textarea', required: true, span2: true, maxlength: 500 },
+        { key: 'referenceDoc', label: 'เอกสารอ้างอิง', required: true, span2: true, maxlength: 300,
+          help: 'เช่น เลขที่และวันที่ของหนังสือขอลดหย่อน หรือประกาศของโรงเรียน' },
+      ],
+      submitLabel: 'ส่งคำขอ',
+      onReady: function (f) {
+        f.type.input.addEventListener('change', function () {
+          var exempt = f.type.get() === 'EXEMPTION';
+          f.amount.input.disabled = exempt;
+          f.amount.input.value = exempt ? formatSatang_(a.outstandingSatang) : '';
+        });
+      },
+      onSubmit: function (v) {
+        return App.api('adjustments.request', {
+          assessmentId: a.assessmentId, type: v.type, amount: v.amount, reason: v.reason, referenceDoc: v.referenceDoc,
+        });
+      },
+      onDone: function (res) {
+        App.toast(res.message, 'success');
+        App.refresh();
+      },
+    });
+  };
+
+  /** ขอยกเลิกรายการเรียกเก็บ (ได้เฉพาะรายการที่ยังไม่มีการชำระ) */
+  App.openCancelAssessmentForm = function (a, who) {
+    App.formModal({
+      title: 'ขอยกเลิกรายการเรียกเก็บ',
+      intro: h('div', { class: 'alert alert-warning' },
+        h('div', { class: 'strong', text: (who ? who + ' · ' : '') + a.label + ' ' + money(a.netSatang) }),
+        h('div', { class: 'small', text: 'ยกเลิกได้เฉพาะรายการที่ยังไม่มีการชำระ รายการเดิมยังเก็บไว้และดูย้อนหลังได้' })),
+      fields: [{ key: 'reason', label: 'เหตุผลการยกเลิก', type: 'textarea', required: true, span2: true, maxlength: 500 }],
+      submitLabel: 'ส่งคำขอยกเลิก',
+      submitKind: 'danger',
+      onSubmit: function (v) { return App.api('assessments.requestCancel', { assessmentId: a.assessmentId, reason: v.reason }); },
+      onDone: function (res) {
+        App.toast(res.message, 'success');
+        App.refresh();
+      },
+    });
+  };
+
+  function assessmentActions(a, who) {
+    if (!isFinance() || a.status !== 'ACTIVE' || a.pendingRequest) return null;
+    return [
+      a.outstandingSatang > 0 ? button('ลดหย่อน/ยกเว้น', 'secondary btn-sm', function () { App.openAdjustmentForm(a, who); }) : null,
+      a.paidSatang === 0 ? button('ขอยกเลิก', 'ghost btn-sm', function () { App.openCancelAssessmentForm(a, who); }) : null,
+    ];
+  }
+
+  // ---------------------------------------------------------------------------
+  // อัตราเงินบำรุง
+  // ---------------------------------------------------------------------------
+
+  function openFeeForm(data, f) {
+    var editing = !!f;
+    var locked = editing && f.locked;
+    var fields = [];
+    if (!editing) {
+      fields.push({ key: 'term', label: 'ภาคเรียน', type: 'select', required: true, options: data.terms, value: '1' });
+      fields.push({ key: 'description', label: 'ชื่อรายการ (ใช้เขียนในใบเสร็จ)', maxlength: 100, value: data.defaultDescription });
+      fields.push({ key: 'gradeLevels', label: 'ระดับชั้น (เลือกได้หลายชั้นถ้าอัตราเท่ากัน)', type: 'checkgroup', required: true, span2: true,
+        options: data.gradeLevels.map(function (g) { return { value: g, label: g }; }) });
+    } else {
+      fields.push({ key: 'description', label: 'ชื่อรายการ (ใช้เขียนในใบเสร็จ)', maxlength: 100, value: f.description, span2: true });
+    }
+    fields.push(
+      { key: 'amount', label: 'จำนวนเงินต่อคน (บาท)', required: true, inputmode: 'decimal', disabled: locked,
+        value: editing ? formatSatang_(f.amountSatang) : '', placeholder: '0.00',
+        help: locked ? 'สร้างรายการเรียกเก็บแล้ว แก้ไม่ได้ ถ้าบางคนต้องจ่ายต่างกัน ให้ใช้การลดหย่อน' : 'เช่น 500 หรือ 1,250.50' },
+      { key: 'dueDate', label: 'วันครบกำหนดชำระ', type: 'date', required: true, disabled: locked, value: editing ? f.dueDate : '' },
+      { key: 'startDate', label: 'วันเริ่มเรียกเก็บ', type: 'date', value: editing ? f.startDate : '' },
+      { key: 'approvalRef', label: 'เอกสารที่อนุมัติอัตรา', type: 'textarea', rows: 2, maxlength: 300, span2: true, value: editing ? f.approvalRef : '',
+        help: 'เลขที่และวันที่ของหนังสือหรือมติที่อนุมัติอัตรานี้ เช่น มติคณะกรรมการสถานศึกษา ครั้งที่ 1/2569 ลงวันที่ 1 พ.ค. 2569 (ต้องกรอกก่อนสร้างรายการเรียกเก็บ)' });
+    if (editing) {
+      fields.push({ key: 'status', label: 'สถานะ', type: 'select', value: f.status,
+        options: [{ value: 'ACTIVE', label: 'ใช้งาน' }, { value: 'INACTIVE', label: 'ไม่ใช้งาน (ไม่สร้างรายการเรียกเก็บเพิ่ม)' }] });
+    }
+    App.formModal({
+      title: editing ? 'แก้ไขอัตรา: ' + f.label : 'ตั้งอัตราเงินบำรุง ปีการศึกษา ' + data.year,
+      size: 'lg',
+      intro: locked ? h('div', { class: 'alert alert-info', text: 'อัตรานี้สร้างรายการเรียกเก็บแล้ว ' + f.stats.count +
+        ' รายการ จึงแก้จำนวนเงินและวันครบกำหนดไม่ได้' }) : null,
+      fields: fields,
+      submitLabel: editing ? 'บันทึก' : 'ตั้งอัตรา',
+      onSubmit: function (v) {
+        var payload = { amount: v.amount, dueDate: v.dueDate, startDate: v.startDate, description: v.description, approvalRef: v.approvalRef };
+        if (editing) {
+          payload.feeSettingId = f.feeSettingId;
+          payload.status = v.status;
+          return App.api('fees.update', payload);
+        }
+        payload.year = data.year;
+        payload.term = v.term;
+        payload.gradeLevels = v.gradeLevels;
+        return App.api('fees.create', payload);
+      },
+      onDone: function (res) {
+        App.toast(editing ? 'บันทึกอัตราเรียบร้อยแล้ว' : 'ตั้งอัตราแล้ว ' + res.length + ' ชั้น', 'success');
+        App.refresh();
+      },
+    });
+  }
+
+  /** ดูตัวอย่าง แล้วยืนยันสร้างรายการเรียกเก็บ */
+  function openGenerate(f) {
+    App.api('assessments.preview', { feeSettingId: f.feeSettingId }).then(function (p) {
+      var n = p.create.length;
+      var body = [
+        h('div', { class: 'alert ' + (n ? 'alert-info' : 'alert-success') },
+          h('div', { class: 'strong', text: n ? 'จะสร้างรายการเรียกเก็บ ' + n + ' คน รวม ' + money(p.totalSatang) : 'ทุกคนที่ต้องเรียกเก็บมีรายการของอัตรานี้แล้ว' }),
+          h('div', { text: p.setting.label + ' คนละ ' + money(p.setting.amountSatang) + ' ครบกำหนด ' + App.fmt.dateLong(p.setting.dueDate) }),
+          p.already ? h('div', { text: 'มีรายการแล้ว ' + p.already + ' คน (ไม่สร้างซ้ำ)' }) : null),
+      ];
+      if (n) {
+        body.push(h('h3', { text: 'รายชื่อที่จะเรียกเก็บ' }), App.table({
+          rows: p.create,
+          columns: [
+            { label: 'ชั้น/ห้อง', key: 'classLabel', className: 'nowrap' },
+            { label: 'เลขที่', key: 'classNo' },
+            { label: 'เลขประจำตัว', render: function (r) { return h('span', { class: 'mono', text: r.studentNo }); } },
+            { label: 'ชื่อ-นามสกุล', key: 'fullName' },
+          ],
+        }));
+      }
+      if (p.skipped.length) {
+        body.push(h('h3', { text: 'ไม่สร้างรายการ ' + p.skipped.length + ' คน' }), App.table({
+          rows: p.skipped,
+          columns: [
+            { label: 'เลขประจำตัว', render: function (r) { return h('span', { class: 'mono', text: r.studentNo }); } },
+            { label: 'ชื่อ-นามสกุล', key: 'fullName' },
+            { label: 'เหตุผล', key: 'reason' },
+          ],
+        }));
+      }
+      var confirmLabel = 'สร้างรายการเรียกเก็บ ' + n + ' คน';
+      App.modal({
+        title: 'สร้างรายการเรียกเก็บ: ' + p.setting.label,
+        size: 'lg',
+        body: body,
+        actions: n ? [
+          { label: 'ยกเลิก', kind: 'secondary' },
+          { label: confirmLabel, onClick: function (btn, close) {
+            btn.disabled = true;
+            btn.textContent = 'กำลังบันทึก…';
+            App.api('assessments.generate', { feeSettingId: f.feeSettingId }).then(function (r) {
+              close();
+              App.toast('สร้างรายการเรียกเก็บ ' + r.created + ' คน รวม ' + money(r.totalSatang) + ' เรียบร้อยแล้ว', 'success');
+              App.refresh();
+            }).catch(function (err) {
+              btn.disabled = false;
+              btn.textContent = confirmLabel;
+              App.fail(err);
+            });
+          } },
+        ] : [{ label: 'ปิด', kind: 'secondary' }],
+      });
+    }).catch(App.fail);
+  }
+
+  App.defineRoute('fees', {
+    title: 'อัตราและการเรียกเก็บ',
+    roles: VIEW,
+    menu: { group: 'finance', label: 'อัตราและการเรียกเก็บ', icon: 'tag', order: 30 },
+    render: function (params) {
+      var year = params.year || App.state.feeYear || App.state.me.school.currentAcademicYear;
+      return Promise.all([App.api('fees.list', { year: year }), App.api('years.list')]).then(function (res) {
+        var data = res[0];
+        var years = res[1];
+        App.state.feeYear = data.year;
+        var canEdit = isFinance() && data.yearOpen;
+        var yearSel = App.field({ label: 'ปีการศึกษา', type: 'select', value: String(data.year),
+          options: years.map(function (y) {
+            return { value: String(y.year), label: y.label + (y.isCurrent ? ' (ปัจจุบัน)' : '') + (y.status === 'CLOSED' ? ' (ปิดแล้ว)' : '') };
+          }) });
+        yearSel.input.addEventListener('change', function () { App.go('fees', { year: Number(yearSel.input.value) }); });
+
+        var totals = { count: 0, net: 0, paid: 0, out: 0 };
+        data.settings.forEach(function (f) {
+          totals.count += f.stats.count;
+          totals.net += f.stats.netSatang;
+          totals.paid += f.stats.paidSatang;
+          totals.out += f.stats.outstandingSatang;
+        });
+
+        var columns = [
+          { label: 'ภาคเรียน', key: 'termLabel', className: 'nowrap' },
+          { label: 'ชั้น', key: 'gradeLevel', className: 'nowrap' },
+          { label: 'อัตรา/คน', className: 'num', render: function (f) { return formatSatang_(f.amountSatang); } },
+          { label: 'ครบกำหนด', className: 'nowrap', render: function (f) { return App.fmt.date(f.dueDate); } },
+          { label: 'เอกสารอนุมัติอัตรา', render: function (f) {
+            return f.approvalRef ? h('span', { class: 'small', text: f.approvalRef }) : App.badge('ยังไม่กรอก', 'danger');
+          } },
+          { label: 'เรียกเก็บ', className: 'num', render: function (f) { return f.stats.count + ' คน'; } },
+          { label: 'ชำระแล้ว', className: 'num', render: function (f) { return formatSatang_(f.stats.paidSatang); } },
+          { label: 'คงค้าง', className: 'num', render: function (f) { return num(f.stats.outstandingSatang, true); } },
+          { label: 'สถานะ', render: function (f) { return App.badge(f.statusLabel, App.KIND.ACTIVE[f.status]); } },
+        ];
+        if (canEdit) {
+          columns.push({ label: 'จัดการ', className: 'actions', render: function (f) {
+            return [
+              f.status === 'ACTIVE' ? button('สร้างรายการเรียกเก็บ', 'primary btn-sm', function () { openGenerate(f); }, 'play') : null,
+              button('แก้ไข', 'secondary btn-sm', function () { openFeeForm(data, f); }, 'edit'),
+            ];
+          } });
+        }
+        var actions = canEdit ? [button('ตั้งอัตราเงินบำรุง', '', function () { openFeeForm(data, null); }, 'plus')] : [];
+        return h('div', null,
+          App.pageHead('อัตราเงินบำรุงและการเรียกเก็บ', 'ปีการศึกษา ' + data.year + ' · คลิกแถวเพื่อดูรายชื่อและยอดค้างรายคน', actions),
+          h('div', { class: 'grid-cards' },
+            App.statCard('รายการเรียกเก็บ', totals.count + ' รายการ'),
+            App.statCard('ยอดเรียกเก็บสุทธิ', money(totals.net)),
+            App.statCard('ชำระแล้ว', money(totals.paid), null, 'success'),
+            App.statCard('คงค้าง', money(totals.out), null, totals.out ? 'danger' : null)),
+          h('div', { class: 'card' }, h('div', { class: 'card-body' },
+            h('div', { class: 'toolbar filter-bar' }, yearSel.wrap),
+            data.yearOpen ? null : h('div', { class: 'alert alert-warning', style: { marginBottom: '12px' },
+              text: 'ปีการศึกษานี้ปิดแล้ว ตั้งอัตราหรือสร้างรายการเรียกเก็บใหม่ไม่ได้ แต่ยังรับชำระหนี้ค้างได้' }),
+            canEdit ? h('p', { class: 'muted small', text: 'ทุกอัตราต้องกรอกเลขที่และวันที่ของหนังสือหรือมติที่อนุมัติอัตรา ก่อนสร้างรายการเรียกเก็บ' }) : null,
+            App.table({
+              rows: data.settings,
+              columns: columns,
+              onRowClick: function (f) { App.go('fee-detail', { feeSettingId: f.feeSettingId }); },
+              empty: 'ยังไม่มีอัตราเงินบำรุงของปีการศึกษานี้' + (canEdit ? ' กด "ตั้งอัตราเงินบำรุง" เพื่อเริ่มต้น' : ''),
+            }))));
+      });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // รายการเรียกเก็บของอัตราหนึ่ง (รายคน)
+  // ---------------------------------------------------------------------------
+  var STATE_OPTIONS = [
+    { value: '', label: 'ทุกสถานะ' },
+    { value: 'OWING', label: 'ยังค้างชำระ (ยังไม่ชำระ + บางส่วน)' },
+    { value: 'UNPAID', label: 'ยังไม่ชำระ' },
+    { value: 'PARTIAL', label: 'ชำระบางส่วน' },
+    { value: 'PAID', label: 'ชำระครบ' },
+    { value: 'EXEMPT', label: 'ได้รับยกเว้น' },
+    { value: 'CANCELLED', label: 'ยกเลิก' },
+  ];
+
+  App.defineRoute('fee-detail', {
+    title: 'รายการเรียกเก็บ',
+    roles: VIEW,
+    render: function (params) {
+      return App.api('assessments.list', { feeSettingId: params.feeSettingId }).then(function (data) {
+        var f = data.setting;
+        var filt = { state: params.state || '', room: '', q: '' };
+        var stateSel = App.field({ label: 'สถานะการชำระ', type: 'select', options: STATE_OPTIONS, value: filt.state });
+        var rooms = [];
+        data.rows.forEach(function (r) { if (r.room && rooms.indexOf(r.room) === -1) rooms.push(r.room); });
+        rooms.sort(function (a, b) { return Number(a) - Number(b) || (a < b ? -1 : a > b ? 1 : 0); });
+        var roomSel = App.field({ label: 'ห้อง', type: 'select', options: [{ value: '', label: 'ทุกห้อง' }].concat(rooms.map(function (r) { return { value: r, label: 'ห้อง ' + r }; })) });
+        var search = App.field({ label: 'ค้นหา', placeholder: 'ชื่อ หรือเลขประจำตัว' });
+        search.wrap.classList.add('filter-wide');
+        var summary = h('div', { class: 'toolbar', style: { gap: '8px', marginBottom: '12px' } });
+        var list = h('div');
+
+        function draw() {
+          var q = filt.q.trim().toLowerCase().replace(/\s+/g, '');
+          var rows = data.rows.filter(function (r) {
+            if (filt.state === 'OWING' && r.outstandingSatang <= 0) return false;
+            if (filt.state && filt.state !== 'OWING' && r.state !== filt.state) return false;
+            if (filt.room && r.room !== filt.room) return false;
+            if (q && (r.studentNo + r.fullName).toLowerCase().replace(/\s+/g, '').indexOf(q) === -1) return false;
+            return true;
+          });
+          clear(summary);
+          ['UNPAID', 'PARTIAL', 'PAID', 'EXEMPT'].forEach(function (s) {
+            summary.appendChild(App.badge(STATE_OPTIONS.filter(function (o) { return o.value === s; })[0].label + ' ' + (f.stats.states[s] || 0), App.KIND.PAY_STATE[s]));
+          });
+          if (rows.length !== data.rows.length) summary.appendChild(App.badge('แสดง ' + rows.length + ' คน', 'FINANCE'));
+          var columns = [
+            { label: 'ชั้น/ห้อง', key: 'classLabel', className: 'nowrap' },
+            { label: 'เลขที่', key: 'classNo' },
+            { label: 'เลขประจำตัว', render: function (r) { return h('span', { class: 'mono', text: r.studentNo }); } },
+            { label: 'ชื่อ-นามสกุล', key: 'fullName' },
+            { label: 'ยอดสุทธิ', className: 'num', render: function (r) { return formatSatang_(r.netSatang); } },
+            { label: 'ชำระแล้ว', className: 'num', render: function (r) { return formatSatang_(r.paidSatang); } },
+            { label: 'คงเหลือ', className: 'num', render: function (r) { return num(r.outstandingSatang, true); } },
+            { label: 'สถานะ', render: stateCell },
+          ];
+          if (data.canManage) {
+            columns.push({ label: 'จัดการ', className: 'actions', render: function (r) { return assessmentActions(r, r.fullName); } });
+          }
+          clear(list).appendChild(App.table({
+            rows: rows,
+            columns: columns,
+            onRowClick: function (r) { App.go('student-account', { studentId: r.studentId, back: 'fee-detail', backParams: { feeSettingId: f.feeSettingId } }); },
+            empty: data.rows.length ? 'ไม่พบรายการตามเงื่อนไข' : 'ยังไม่ได้สร้างรายการเรียกเก็บของอัตรานี้',
+          }));
+        }
+        stateSel.input.addEventListener('change', function () { filt.state = stateSel.get(); draw(); });
+        roomSel.input.addEventListener('change', function () { filt.room = roomSel.get(); draw(); });
+        search.input.addEventListener('input', function () { filt.q = search.get(); draw(); });
+        draw();
+
+        var actions = [button('กลับ', 'secondary', function () { App.go('fees', { year: f.year }); }, 'arrowLeft')];
+        if (data.canManage && f.status === 'ACTIVE') {
+          actions.push(button('สร้างรายการเรียกเก็บ', '', function () { openGenerate(f); }, 'play'));
+        }
+        return h('div', null,
+          App.pageHead(f.label, 'คนละ ' + money(f.amountSatang) + ' · ครบกำหนด ' + App.fmt.dateLong(f.dueDate) +
+            (f.approvalRef ? ' · อนุมัติตาม ' + f.approvalRef : ' · ยังไม่ได้กรอกเอกสารที่อนุมัติอัตรา'), actions),
+          h('div', { class: 'grid-cards' },
+            App.statCard('เรียกเก็บ', f.stats.count + ' คน'),
+            App.statCard('ยอดเรียกเก็บสุทธิ', money(f.stats.netSatang)),
+            App.statCard('ชำระแล้ว', money(f.stats.paidSatang), null, 'success'),
+            App.statCard('คงค้าง', money(f.stats.outstandingSatang), null, f.stats.outstandingSatang ? 'danger' : null)),
+          h('div', { class: 'card' }, h('div', { class: 'card-body' },
+            h('div', { class: 'toolbar filter-bar' }, stateSel.wrap, roomSel.wrap, search.wrap),
+            summary, list)));
+      });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // บัญชีการเงินของนักเรียน
+  // ---------------------------------------------------------------------------
+
+  function openAddAssessment(d) {
+    App.formModal({
+      title: 'เพิ่มรายการเรียกเก็บรายบุคคล',
+      intro: h('div', { class: 'alert alert-info', text: 'ใช้กับนักเรียนที่ย้ายเข้ากลางปี หรือไม่ได้อยู่ในการสร้างรายการเรียกเก็บรอบก่อน เลือกได้เฉพาะอัตราของชั้นที่นักเรียนเรียนในปีนั้น' }),
+      fields: [{ key: 'feeSettingId', label: 'อัตรา', type: 'select', required: true, span2: true,
+        options: d.availableFees.map(function (f) { return { value: f.feeSettingId, label: f.label + ' (' + money(f.amountSatang) + ')' }; }) }],
+      submitLabel: 'เพิ่มรายการ',
+      onSubmit: function (v) { return App.api('assessments.createOne', { studentId: d.student.studentId, feeSettingId: v.feeSettingId }); },
+      onDone: function () {
+        App.toast('เพิ่มรายการเรียกเก็บเรียบร้อยแล้ว', 'success');
+        App.refresh();
+      },
+    });
+  }
+
+  function openRevoke(adj) {
+    App.formModal({
+      title: 'เพิกถอน' + adj.typeLabel,
+      intro: h('div', { class: 'alert alert-warning' },
+        h('div', { class: 'strong', text: adj.label + ' ' + money(adj.amountSatang) }),
+        h('div', { class: 'small', text: 'หลังเพิกถอน ยอดค้างของรายการนี้จะกลับมาตามเดิม และบันทึกเหตุผลไว้ในประวัติ' })),
+      fields: [{ key: 'reason', label: 'เหตุผลการเพิกถอน', type: 'textarea', required: true, span2: true, maxlength: 500 }],
+      submitLabel: 'เพิกถอน',
+      submitKind: 'danger',
+      onSubmit: function (v) { return App.api('adjustments.revoke', { adjustmentId: adj.adjustmentId, reason: v.reason }); },
+      onDone: function (res) {
+        App.toast(res.message, 'success');
+        App.refresh();
+      },
+    });
+  }
+
+  function section(title, content) {
+    return h('div', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: title })),
+      h('div', { class: 'card-body' }, content));
+  }
+
+  App.defineRoute('student-account', {
+    title: 'บัญชีนักเรียน',
+    roles: VIEW,
+    render: function (params) {
+      return App.api('ledger.student', { studentId: params.studentId }).then(function (d) {
+        var s = d.student;
+        var t = d.totals;
+        var actions = [];
+        if (params.back) actions.push(button('กลับ', 'secondary', function () { App.go(params.back, params.backParams); }, 'arrowLeft'));
+        if (isFinance()) {
+          actions.push(button('รับชำระเงิน', '', function () { App.go('payments', { studentId: s.studentId }); }, 'cash'));
+          if (d.availableFees.length) actions.push(button('เพิ่มรายการเรียกเก็บ', 'secondary', function () { openAddAssessment(d); }, 'plus'));
+        }
+        var desc = 'เลขประจำตัว ' + s.studentNo + (s.classLabel ? ' · ชั้น ' + s.classLabel + ' ปีการศึกษา ' + s.year : '') + ' · ' + s.statusLabel;
+
+        var assessments = App.table({
+          rows: d.assessments,
+          empty: 'ยังไม่มีรายการเรียกเก็บ',
+          columns: [
+            { label: 'รายการ', render: function (a) { return [h('div', { text: a.label }), a.overdue ? App.badge('เลยกำหนด', 'danger') : null]; } },
+            { label: 'ครบกำหนด', className: 'nowrap', render: function (a) { return App.fmt.date(a.dueDate); } },
+            { label: 'เรียกเก็บ', className: 'num', render: function (a) { return formatSatang_(a.grossSatang); } },
+            { label: 'ลดหย่อน/ยกเว้น', className: 'num', render: function (a) { return a.adjustSatang ? formatSatang_(a.adjustSatang) : '–'; } },
+            { label: 'ชำระแล้ว', className: 'num', render: function (a) { return formatSatang_(a.paidSatang); } },
+            { label: 'คงเหลือ', className: 'num', render: function (a) { return num(a.outstandingSatang, true); } },
+            { label: 'สถานะ', render: function (a) {
+              return [stateCell(a), a.status === 'CANCELLED' && a.cancelReason ? h('div', { class: 'muted small', text: 'เหตุผล: ' + a.cancelReason }) : null];
+            } },
+            { label: 'จัดการ', className: 'actions', render: function (a) { return assessmentActions(a, s.fullName); } },
+          ],
+        });
+
+        var payments = App.table({
+          rows: d.payments,
+          empty: 'ยังไม่มีการรับเงิน',
+          columns: [
+            { label: 'วันที่', className: 'nowrap', render: function (p) { return App.fmt.date(p.date); } },
+            { label: 'ใบเสร็จ', className: 'nowrap', render: function (p) { return 'เล่ม ' + p.bookNo + ' เลขที่ ' + p.receiptNo; } },
+            { label: 'จำนวนเงิน', className: 'num', render: function (p) { return h('span', { class: 'strong', text: formatSatang_(p.amountSatang) }); } },
+            { label: 'ช่องทาง', render: function (p) { return [h('div', { text: p.channel }), p.channelRef ? h('div', { class: 'muted small', text: p.channelRef }) : null]; } },
+            { label: 'ตัดชำระ', render: function (p) {
+              return h('ul', { class: 'inline-list small' }, p.allocations.map(function (al) { return h('li', { text: al.label + ' ' + formatSatang_(al.amountSatang) }); }));
+            } },
+            { label: 'ผู้รับเงิน', key: 'receivedByName' },
+            { label: 'สถานะ', render: function (p) { return App.badge(p.statusLabel, App.KIND.ACTIVE[p.status]); } },
+          ],
+        });
+
+        var adjustments = App.table({
+          rows: d.adjustments,
+          empty: 'ไม่มีการลดหย่อนหรือยกเว้น',
+          columns: [
+            { label: 'วันที่', className: 'nowrap', render: function (a) { return App.fmt.date(a.createdAt.slice(0, 10)); } },
+            { label: 'รายการ', key: 'label' },
+            { label: 'ประเภท', key: 'typeLabel' },
+            { label: 'จำนวนเงิน', className: 'num', render: function (a) { return formatSatang_(a.amountSatang); } },
+            { label: 'เหตุผล / เอกสาร', render: function (a) { return [h('div', { text: a.reason }), h('div', { class: 'muted small', text: a.referenceDoc })]; } },
+            { label: 'ผู้ขอ / ผู้อนุมัติ', render: function (a) {
+              return [h('div', { text: a.requestedBy }), h('div', { class: 'muted small', text: a.approvedBy ? 'อนุมัติโดย ' + a.approvedBy : 'ไม่ต้องอนุมัติตามการตั้งค่า' })];
+            } },
+            { label: 'สถานะ', render: function (a) {
+              return [App.badge(a.statusLabel, App.KIND.ACTIVE[a.status]),
+                a.status === 'REVOKED' ? h('div', { class: 'muted small', text: 'โดย ' + a.revokedBy + ': ' + a.revokeReason }) : null];
+            } },
+            { label: 'จัดการ', className: 'actions', render: function (a) {
+              return isDirector() && a.status === 'ACTIVE' ? button('เพิกถอน', 'ghost btn-sm', function () { openRevoke(a); }) : null;
+            } },
+          ],
+        });
+
+        var requests = App.table({
+          rows: d.requests,
+          empty: 'ไม่มีคำขออนุมัติ',
+          columns: [
+            { label: 'วันที่ขอ', className: 'nowrap', render: function (r) { return App.fmt.datetime(r.createdAt); } },
+            { label: 'ประเภท', key: 'typeLabel' },
+            { label: 'รายละเอียด', key: 'summary' },
+            { label: 'สถานะ', render: function (r) { return App.badge(r.statusLabel, App.KIND.DECISION[r.status]); } },
+            { label: 'ผลการพิจารณา', render: function (r) {
+              return r.decidedByName ? [h('div', { text: r.decidedByName }), r.decisionNote ? h('div', { class: 'muted small', text: r.decisionNote }) : null] : '–';
+            } },
+          ],
+        });
+
+        return h('div', null,
+          App.pageHead(s.fullName, desc, actions),
+          h('div', { class: 'grid-cards' },
+            App.statCard('ยอดเรียกเก็บสุทธิ', money(t.netSatang), t.adjustSatang ? 'หลังลดหย่อน/ยกเว้น ' + money(t.adjustSatang) : null),
+            App.statCard('ชำระแล้ว', money(t.paidSatang), null, 'success'),
+            App.statCard('คงค้าง', money(t.outstandingSatang), t.overdueSatang ? 'เลยกำหนดแล้ว ' + money(t.overdueSatang) : null, t.outstandingSatang ? 'danger' : null)),
+          h('div', { class: 'stack' },
+            section('รายการเรียกเก็บทุกปีการศึกษา', assessments),
+            section('ประวัติการรับเงิน', payments),
+            section('ลดหย่อน/ยกเว้น', adjustments),
+            section('คำขออนุมัติ', requests)));
+      });
+    },
+  });
+})();
+</script>

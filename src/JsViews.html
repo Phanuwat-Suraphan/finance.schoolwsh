@@ -12,6 +12,7 @@
 
   App.MENU_GROUPS = [
     { key: 'main', label: 'ทั่วไป' },
+    { key: 'finance', label: 'การเงิน' },
     { key: 'students', label: 'ข้อมูลนักเรียน' },
     { key: 'manage', label: 'การจัดการระบบ' },
     { key: 'info', label: 'ข้อมูลโรงเรียน' },
@@ -210,30 +211,45 @@
           ])));
       } else if (role === 'DIRECTOR') {
         card = h('div', { class: 'card' },
-          h('div', { class: 'card-head' }, h('h2', { text: 'สิ่งที่ทำได้ในขณะนี้' })),
+          h('div', { class: 'card-head' }, h('h2', { text: 'งานของผู้อำนวยการ' })),
           h('div', { class: 'card-body' }, stepList([
-            { text: 'ดูรายชื่อนักเรียนแยกตามปีการศึกษา ชั้น และห้อง', route: 'students' },
+            { text: 'พิจารณาคำขอลดหย่อน ยกเว้น และยกเลิกรายการเรียกเก็บ', help: 'ตรวจเหตุผลและเอกสารอ้างอิงก่อนอนุมัติ', route: 'approvals', button: 'คำขออนุมัติ' },
+            { text: 'ดูรายการรับเงินประจำวันและยอดรวมแยกช่องทาง', route: 'payment-history', button: 'รายการรับเงิน' },
+            { text: 'ดูอัตราเงินบำรุง ยอดเรียกเก็บ และยอดค้างของแต่ละชั้น', route: 'fees' },
+            { text: 'ดูทะเบียนเล่มใบเสร็จ และเลขที่ที่ใช้ไป', route: 'receipt-books' },
             { text: 'ดูประวัติการใช้งานของทุกบัญชี และตรวจว่าประวัติไม่ถูกแก้ไข', route: 'audit' },
-            { text: 'ดูข้อมูลโรงเรียนและปีการศึกษา', route: 'settings' },
-            { text: 'Dashboard การเงินและการอนุมัติรายการจะเปิดใช้ในระยะถัดไป' },
           ])));
       } else {
         card = h('div', { class: 'card' },
           h('div', { class: 'card-head' }, h('h2', { text: 'งานของเจ้าหน้าที่การเงิน' })),
           h('div', { class: 'card-body' }, stepList([
             { text: 'นำเข้ารายชื่อนักเรียนจาก Excel หรือ CSV แล้วตรวจรายชื่อแยกตามชั้นและห้อง', route: 'students', button: 'ข้อมูลนักเรียน' },
-            { text: 'ตั้งอัตราเงินบำรุง เรียกเก็บ และรับชำระ (ระยะที่ 4)' },
-            { text: 'ทะเบียนคุมใบเสร็จรับเงิน (ระยะที่ 5)' },
-            { text: 'ติดตามยอดค้าง รายงาน และพิมพ์เอกสาร (ระยะที่ 6–7)' },
+            { text: 'ตั้งอัตราเงินบำรุงพร้อมเอกสารที่อนุมัติ แล้วสร้างรายการเรียกเก็บ', route: 'fees', button: 'อัตราและการเรียกเก็บ' },
+            { text: 'ลงทะเบียนและเปิดใช้เล่มใบเสร็จรับเงินจากเล่มจริง', route: 'receipt-books', button: 'เล่มใบเสร็จ' },
+            { text: 'รับชำระเงิน: เขียนใบเสร็จจริง แล้วบันทึกเลขเล่ม เลขที่ และจำนวนเงิน', route: 'payments', button: 'รับชำระเงิน' },
+            { text: 'ยื่นคำขอลดหย่อน ยกเว้น หรือยกเลิกรายการเรียกเก็บ และติดตามผล', route: 'approvals', button: 'คำขออนุมัติ' },
           ])));
       }
-      return h('div', null,
-        pageHead('สวัสดี คุณ' + me.user.displayName, me.school.name + ' · ' + me.user.roleLabel),
-        h('div', { class: 'grid-cards' },
-          stat('ปีการศึกษาปัจจุบัน', String(me.school.currentAcademicYear)),
-          stat('บทบาทของคุณ', me.user.roleLabel),
-          stat('สถานะการพัฒนาระบบ', (/ระยะที่ \d+/.exec(BOOT.release) || ['ระยะที่ ?'])[0] + ' จาก 8')),
-        card);
+      var stats = [
+        stat('ปีการศึกษาปัจจุบัน', String(me.school.currentAcademicYear)),
+        stat('บทบาทของคุณ', me.user.roleLabel),
+        stat('สถานะการพัฒนาระบบ', (/ระยะที่ \d+/.exec(BOOT.release) || ['ระยะที่ ?'])[0] + ' จาก 8'),
+      ];
+      var page = function (extra) {
+        return h('div', null,
+          pageHead('สวัสดี คุณ' + me.user.displayName, me.school.name + ' · ' + me.user.roleLabel),
+          h('div', { class: 'grid-cards' }, (extra ? [extra] : []).concat(stats)),
+          card);
+      };
+      if (role === 'ADMIN') return page(null);
+      // คำขอที่รออนุมัติ (ผู้อำนวยการต้องพิจารณา / เจ้าหน้าที่รอผล)
+      return App.api('approvals.list').then(function (res) {
+        var label = role === 'DIRECTOR' ? 'คำขอรอพิจารณา' : 'คำขอรออนุมัติ';
+        var box = App.statCard(label, res.pendingCount + ' รายการ', res.pendingCount ? 'กดเพื่อดูรายละเอียด' : 'ไม่มีคำขอค้าง', res.pendingCount ? 'danger' : null);
+        box.classList.add('clickable');
+        box.addEventListener('click', function () { App.go('approvals'); });
+        return page(box);
+      }, function () { return page(null); });
     },
   });
 

@@ -1,0 +1,504 @@
+<script>
+/* ==========================================================================
+   JsPayments — รับชำระเงิน รายการรับเงิน และทะเบียนเล่มใบเสร็จ (ระยะที่ 4)
+   ระบบไม่ออกเลขใบเสร็จเอง: เจ้าหน้าที่เขียนใบเสร็จจริงจากเล่มที่ลงทะเบียนไว้ แล้วบันทึกเลขเล่ม เลขที่ และจำนวนเงิน
+   Server ตรวจเลขที่ ยอดคงเหลือ และการบันทึกซ้ำอีกครั้งภายใต้ lock ทุกครั้ง
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var button = App.button;
+  var money = App.fmt.money;
+  var VIEW = ['FINANCE', 'DIRECTOR'];
+
+  App.state.paySearch = '';
+  App.state.payOnlyOwing = true;
+
+  function isCash(channel) { return /เงินสด/.test(String(channel || '')); }
+
+  function parseSatang(text) {
+    var r = parseMoneyToSatang_(String(text === null || text === undefined ? '' : text).trim());
+    return r.ok ? r.satang : null;
+  }
+
+  /** ป้ายเล่มที่กำลังใช้และเลขที่ถัดไป */
+  function bookBanner(book, strict) {
+    if (!book) {
+      return h('div', { class: 'alert alert-warning stack', style: { marginBottom: '16px', gap: '6px' } },
+        h('div', { class: 'strong', text: 'ยังไม่มีเล่มใบเสร็จที่กำลังใช้' }),
+        h('div', { text: 'ต้องลงทะเบียนเล่มใบเสร็จจริงและเปิดใช้ก่อนรับเงิน (ระบบไม่ออกเลขใบเสร็จเอง)' }),
+        App.canAccess('receipt-books') ? h('div', null, button('ไปที่เล่มใบเสร็จ', 'secondary btn-sm', function () { App.go('receipt-books'); }, 'book')) : null);
+    }
+    return h('div', { class: 'card banner', style: { marginBottom: '16px' } },
+      h('div', null,
+        h('div', { class: 'muted small', text: 'ใบเสร็จฉบับถัดไปที่ต้องใช้' }),
+        h('div', { class: 'big', text: 'เล่มที่ ' + book.bookNo + ' เลขที่ ' + book.nextNo }),
+        h('div', { class: 'muted small', text: 'เหลือ ' + book.remaining + ' ฉบับ (เลขที่ ' + book.startNo + '–' + book.endNo + ')' +
+          (strict ? ' · ใช้เลขที่เรียงลำดับ' : '') })),
+      book.low ? App.badge('ใกล้หมดเล่ม กรุณาเตรียมเล่มใหม่', 'warning') : null);
+  }
+
+  function receiptLabel(p) { return 'เล่มที่ ' + p.bookNo + ' เลขที่ ' + p.receiptNo; }
+
+  function recentPayments(list) {
+    if (!list || !list.length) return null;
+    return h('div', { class: 'card' },
+      h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'การรับเงินล่าสุดของนักเรียนคนนี้' })),
+      h('div', { class: 'card-body' }, App.table({
+        rows: list,
+        columns: [
+          { label: 'วันที่', className: 'nowrap', render: function (p) { return App.fmt.date(p.date); } },
+          { label: 'ใบเสร็จ', className: 'nowrap', render: receiptLabel },
+          { label: 'จำนวนเงิน', className: 'num', render: function (p) { return formatSatang_(p.amountSatang); } },
+          { label: 'ตัดชำระ', render: function (p) {
+            return h('ul', { class: 'inline-list small' }, p.allocations.map(function (al) { return h('li', { text: al.label + ' ' + formatSatang_(al.amountSatang) }); }));
+          } },
+        ],
+      })));
+  }
+
+  // ---------------------------------------------------------------------------
+  // รับชำระเงิน: ขั้นที่ 1 เลือกนักเรียน
+  // ---------------------------------------------------------------------------
+  function renderSearch(ctx, list) {
+    var search = App.field({ label: 'ค้นหานักเรียน', placeholder: 'ชื่อ นามสกุล หรือเลขประจำตัว', value: App.state.paySearch });
+    search.wrap.classList.add('filter-wide');
+    var owing = App.field({ label: 'แสดงเฉพาะผู้ที่มียอดค้าง', type: 'checkbox', value: App.state.payOnlyOwing });
+    var results = h('div');
+    function draw() {
+      var q = search.get().trim().toLowerCase().replace(/\s+/g, '');
+      var rows = list.rows.filter(function (r) {
+        if (owing.get() && r.outstandingSatang <= 0) return false;
+        if (q && (r.studentNo + r.fullName).toLowerCase().replace(/\s+/g, '').indexOf(q) === -1) return false;
+        return true;
+      });
+      var shown = rows.slice(0, 50);
+      clear(results).appendChild(App.table({
+        rows: shown,
+        onRowClick: function (r) { App.go('payments', { studentId: r.studentId }); },
+        empty: q ? 'ไม่พบนักเรียนตามคำค้น' + (owing.get() ? ' (ลองเอาติ๊ก "แสดงเฉพาะผู้ที่มียอดค้าง" ออก)' : '') : 'ไม่มีนักเรียนที่มียอดค้าง',
+        columns: [
+          { label: 'เลขประจำตัว', render: function (r) { return h('span', { class: 'mono', text: r.studentNo }); } },
+          { label: 'ชื่อ-นามสกุล', render: function (r) {
+            return [h('div', { text: r.fullName }), r.status !== 'STUDYING' ? App.badge(r.statusLabel, 'muted') : null];
+          } },
+          { label: 'ชั้น/ห้อง', className: 'nowrap', render: function (r) { return r.classLabel ? r.classLabel + (r.year !== list.currentYear ? ' (' + r.year + ')' : '') : '–'; } },
+          { label: 'ยอดค้าง', className: 'num', render: function (r) {
+            return h('span', { class: r.outstandingSatang ? 'text-danger strong' : '', text: formatSatang_(r.outstandingSatang) });
+          } },
+          { label: 'เลยกำหนด', className: 'num', render: function (r) { return r.overdueSatang ? formatSatang_(r.overdueSatang) : '–'; } },
+          { label: '', className: 'actions', render: function (r) {
+            return button('รับเงิน', 'secondary btn-sm', function () { App.go('payments', { studentId: r.studentId }); }, 'cash');
+          } },
+        ],
+      }));
+      if (rows.length > shown.length) {
+        results.appendChild(h('p', { class: 'muted small', text: 'แสดง 50 คนแรกจาก ' + rows.length + ' คน พิมพ์ชื่อหรือเลขประจำตัวเพื่อค้นหาให้แคบลง' }));
+      }
+    }
+    search.input.addEventListener('input', function () { App.state.paySearch = search.get(); draw(); });
+    owing.input.addEventListener('change', function () { App.state.payOnlyOwing = owing.get(); draw(); });
+    draw();
+    setTimeout(function () { search.input.focus(); }, 0);
+    return h('div', null,
+      App.pageHead('รับชำระเงิน', 'เลือกนักเรียน แล้วบันทึกตามใบเสร็จรับเงินฉบับจริงที่เขียนให้ผู้ปกครอง'),
+      bookBanner(ctx.book, ctx.strict),
+      h('div', { class: 'card' }, h('div', { class: 'card-body' },
+        h('div', { class: 'toolbar filter-bar' }, search.wrap, owing.wrap),
+        results)));
+  }
+
+  // ---------------------------------------------------------------------------
+  // รับชำระเงิน: ขั้นที่ 2 บันทึกการรับเงิน
+  // ---------------------------------------------------------------------------
+  function renderForm(ctx) {
+    var s = ctx.student;
+    var requestKey = App.newRequestKey(); // ใช้ค่าเดิมเมื่อกดบันทึกซ้ำ ระบบจึงไม่บันทึกซ้ำ
+    var head = App.pageHead('รับชำระเงิน: ' + s.fullName,
+      'เลขประจำตัว ' + s.studentNo + (s.classLabel ? ' · ชั้น ' + s.classLabel : '') + ' · ยอดค้างทั้งหมด ' + money(ctx.outstandingSatang), [
+        button('เลือกนักเรียนคนอื่น', 'secondary', function () { App.go('payments'); }, 'arrowLeft'),
+        button('บัญชีนักเรียน', 'secondary', function () {
+          App.go('student-account', { studentId: s.studentId, back: 'payments', backParams: { studentId: s.studentId } });
+        }, 'user'),
+      ]);
+    if (!ctx.items.length) {
+      return h('div', null, head, h('div', { class: 'alert alert-success', style: { marginBottom: '16px' }, text: 'นักเรียนคนนี้ไม่มียอดค้างชำระ' }),
+        recentPayments(ctx.recentPayments));
+    }
+    if (!ctx.book) return h('div', null, head, bookBanner(null, ctx.strict));
+
+    var amount = App.field({ label: 'จำนวนเงินที่รับ (บาท)', required: true, inputmode: 'decimal', placeholder: '0.00' });
+    amount.input.classList.add('amount-input');
+    var fillAll = button('รับเต็มยอดค้าง ' + formatSatang_(ctx.outstandingSatang) + ' บาท', 'secondary btn-sm', function () {
+      amount.input.value = formatSatang_(ctx.outstandingSatang);
+      onAmount();
+    });
+    var date = App.field({ label: 'วันที่รับเงิน', type: 'date', required: true, value: ctx.today, max: ctx.today });
+    var channel = App.field({ label: 'ช่องทางการรับเงิน', type: 'select', required: true,
+      options: ctx.channels.map(function (c) { return { value: c, label: c }; }) });
+    var channelRef = App.field({ label: 'เลขอ้างอิงการโอน', required: true, maxlength: 100, help: 'เช่น เลขที่รายการจากสลิปโอนเงิน' });
+    var receivedBy = App.field({ label: 'ผู้รับเงิน', required: true, maxlength: 100, value: ctx.receivedByName });
+    var note = App.field({ label: 'หมายเหตุ', maxlength: 300 });
+    var bookNo = App.field({ label: 'เล่มที่', value: ctx.book.bookNo, disabled: true });
+    var receiptNo = App.field({ label: 'เลขที่ใบเสร็จ', type: 'number', required: true, value: ctx.book.nextNo, inputmode: 'numeric',
+      min: ctx.book.startNo, max: ctx.book.endNo, disabled: ctx.strict,
+      help: ctx.strict ? 'ระบบตั้งค่าให้ใช้เลขที่ถัดไปเท่านั้น ถ้าใบเสร็จฉบับนี้เขียนผิด ต้องยกเลิกเลขที่ก่อน' : 'เลขที่ถัดไปคือ ' + ctx.book.nextNo });
+    function syncChannel() { channelRef.wrap.classList.toggle('hidden', isCash(channel.get())); }
+    channel.input.addEventListener('change', syncChannel);
+    syncChannel();
+
+    var allocInputs = {};
+    var allocTable = App.table({
+      rows: ctx.items,
+      columns: [
+        { label: 'รายการ', render: function (it) { return [h('div', { text: it.label }), it.overdue ? App.badge('เลยกำหนด', 'danger') : null]; } },
+        { label: 'ครบกำหนด', className: 'nowrap', render: function (it) { return App.fmt.date(it.dueDate); } },
+        { label: 'คงเหลือ', className: 'num', render: function (it) { return formatSatang_(it.outstandingSatang); } },
+        { label: 'ตัดชำระครั้งนี้', className: 'num', render: function (it) {
+          var input = h('input', { class: 'input alloc-input', inputmode: 'decimal', placeholder: '0.00', 'aria-label': 'ตัดชำระ ' + it.label });
+          input.addEventListener('input', update);
+          allocInputs[it.assessmentId] = input;
+          return input;
+        } },
+      ],
+    });
+    var sumLine = h('div', { class: 'sum-line', role: 'status' });
+    var preview = h('div', { class: 'receipt-preview' });
+    var errorBox = h('div', { class: 'alert alert-error hidden', role: 'alert' });
+    var confirmBox = h('input', { type: 'checkbox', id: 'confirm-receipt' });
+    var confirmLabel = h('label', { class: 'confirm-box', for: 'confirm-receipt' }, confirmBox, h('span', { text: ctx.confirmText }));
+    var saveLabel = h('span', { text: 'บันทึกการรับเงิน' });
+    var saveBtn = h('button', { type: 'button', class: 'btn' }, App.icon('check'), saveLabel);
+    saveBtn.addEventListener('click', function () { save(false); });
+
+    function onAmount() {
+      var a = parseSatang(amount.get());
+      var plan = autoAllocate_(ctx.items.map(function (it) { return { id: it.assessmentId, outstandingSatang: it.outstandingSatang }; }), a && a > 0 ? a : 0);
+      ctx.items.forEach(function (it) { allocInputs[it.assessmentId].value = ''; });
+      plan.allocations.forEach(function (al) { allocInputs[al.id].value = formatSatang_(al.satang); });
+      update();
+    }
+    amount.input.addEventListener('input', onAmount);
+    receiptNo.input.addEventListener('input', function () { update(); });
+
+    /** ตรวจยอดบนหน้าเว็บ (Server ตรวจซ้ำอีกครั้งเสมอ) */
+    function update() {
+      var a = parseSatang(amount.get());
+      var list = [];
+      var badText = false;
+      ctx.items.forEach(function (it) {
+        var text = allocInputs[it.assessmentId].value.trim();
+        if (!text) return;
+        var v = parseSatang(text);
+        if (v === null || v < 0) { badText = true; return; }
+        if (v > 0) list.push({ item: it, satang: v });
+      });
+      var sum = list.reduce(function (t, x) { return t + x.satang; }, 0);
+      var over = list.filter(function (x) { return x.satang > x.item.outstandingSatang; });
+      var message = '';
+      var ok = false;
+      if (a === null || a <= 0) message = 'กรอกจำนวนเงินที่รับ ระบบจะตัดหนี้เก่าก่อนให้อัตโนมัติ และแก้ยอดตัดชำระแต่ละรายการได้';
+      else if (a > ctx.outstandingSatang) message = 'จำนวนเงินที่รับเกินยอดค้างทั้งหมด (' + money(ctx.outstandingSatang) + ') ระบบไม่รับเงินเกินยอดค้าง';
+      else if (badText) message = 'ยอดตัดชำระต้องเป็นตัวเลข มีทศนิยมไม่เกิน 2 ตำแหน่ง';
+      else if (over.length) message = 'ยอดตัดชำระของ "' + over[0].item.label + '" เกินยอดคงเหลือ';
+      else if (sum !== a) message = 'ยอดตัดชำระรวม ' + money(sum) + ' ยังไม่เท่ากับจำนวนเงินที่รับ ' + money(a);
+      else { message = 'ยอดตัดชำระรวม ' + money(sum) + ' เท่ากับจำนวนเงินที่รับ'; ok = true; }
+      sumLine.textContent = message;
+      sumLine.className = 'sum-line' + (a === null || a <= 0 ? '' : ok ? ' good' : ' bad');
+
+      clear(preview);
+      preview.appendChild(h('h3', { text: 'รายการที่ต้องเขียนในใบเสร็จ เล่มที่ ' + ctx.book.bookNo + ' เลขที่ ' + (receiptNo.get() || '–') }));
+      if (!list.length) preview.appendChild(h('div', { class: 'muted', text: 'ยังไม่มีรายการ' }));
+      list.forEach(function (x, i) {
+        preview.appendChild(h('div', { class: 'receipt-line' }, h('span', { text: (i + 1) + '. ' + x.item.label }), h('span', { class: 'nowrap', text: money(x.satang) })));
+      });
+      if (list.length) {
+        preview.appendChild(h('div', { class: 'receipt-total' }, h('span', { text: 'รวมเงิน' }), h('span', { class: 'nowrap', text: money(sum) })));
+        preview.appendChild(h('div', { class: 'muted small', text: '(' + bahtText_(sum) + ')' }));
+      }
+      return { ok: ok, message: message, amount: a, list: list };
+    }
+
+    function showError(message, withReload) {
+      clear(errorBox).appendChild(h('div', { text: message }));
+      if (withReload) {
+        errorBox.appendChild(h('div', { style: { marginTop: '8px' } },
+          button('โหลดเลขที่และยอดล่าสุด', 'secondary btn-sm', function () { App.go('payments', { studentId: s.studentId }); })));
+      }
+      errorBox.classList.remove('hidden');
+      errorBox.scrollIntoView({ block: 'nearest' });
+    }
+
+    function save(confirmSkip) {
+      errorBox.classList.add('hidden');
+      var st = update();
+      if (!st.ok) return showError(st.message);
+      if (!date.get()) return showError('กรุณาระบุวันที่รับเงิน');
+      if (!isCash(channel.get()) && !channelRef.get().trim()) return showError('กรุณากรอกเลขอ้างอิงการโอน');
+      if (!receivedBy.get().trim()) return showError('กรุณากรอกชื่อผู้รับเงิน');
+      if (!confirmBox.checked) return showError('กรุณาติ๊กยืนยันว่าได้ตรวจสอบใบเสร็จรับเงินฉบับจริงแล้ว');
+      saveBtn.disabled = true;
+      saveLabel.textContent = 'กำลังบันทึก…';
+      App.api('payments.create', {
+        requestKey: requestKey,
+        studentId: s.studentId,
+        paymentDate: date.get(),
+        amount: formatSatang_(st.amount),
+        channel: channel.get(),
+        channelRef: isCash(channel.get()) ? '' : channelRef.get(),
+        receivedByName: receivedBy.get(),
+        note: note.get(),
+        bookId: ctx.book.bookId,
+        receiptNo: Number(receiptNo.get()),
+        confirmPhysicalReceipt: true,
+        confirmSkipNumber: confirmSkip === true,
+        allocations: st.list.map(function (x) { return { assessmentId: x.item.assessmentId, amount: formatSatang_(x.satang) }; }),
+      }).then(function (res) {
+        showSuccess(s, res);
+      }).catch(function (err) {
+        saveBtn.disabled = false;
+        saveLabel.textContent = 'บันทึกการรับเงิน';
+        var reason = err && err.reason;
+        if (reason === 'RECEIPT_GAP_CONFIRM') {
+          App.confirm(err.message, { title: 'ยืนยันการข้ามเลขที่ใบเสร็จ', confirmLabel: 'ยืนยัน ใช้เลขที่นี้' })
+            .then(function (yes) { if (yes) save(true); });
+          return;
+        }
+        if (['RECEIPT_NO_TAKEN', 'BOOK_CHANGED', 'BALANCE_CHANGED', 'RECEIPT_STRICT'].indexOf(reason) !== -1) {
+          showError(err.message, true);
+          return;
+        }
+        if (err && err.code === 'NETWORK') {
+          showError(err.message + ' กดบันทึกอีกครั้งได้ ระบบจะไม่บันทึกซ้ำ');
+          return;
+        }
+        showError((err && err.message) || 'บันทึกไม่สำเร็จ กรุณาลองใหม่');
+      });
+    }
+
+    update();
+    setTimeout(function () { amount.input.focus(); }, 0);
+    return h('div', null, head, bookBanner(ctx.book, ctx.strict),
+      h('div', { class: 'stack' },
+        h('div', { class: 'card' },
+          h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: '1. จำนวนเงินและการรับเงิน' })),
+          h('div', { class: 'card-body stack' },
+            h('div', { class: 'form-grid' }, amount.wrap, h('div', { class: 'field', style: { alignSelf: 'end' } }, fillAll),
+              date.wrap, channel.wrap, channelRef.wrap, receivedBy.wrap, note.wrap),
+            sumLine)),
+        h('div', { class: 'card' },
+          h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: '2. รายการที่ตัดชำระ (หนี้เก่าอยู่บนสุด)' })),
+          h('div', { class: 'card-body' }, allocTable)),
+        h('div', { class: 'card' },
+          h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: '3. ใบเสร็จรับเงิน' })),
+          h('div', { class: 'card-body stack' },
+            h('div', { class: 'form-grid' }, bookNo.wrap, receiptNo.wrap),
+            preview, confirmLabel, errorBox,
+            h('div', { class: 'toolbar', style: { justifyContent: 'flex-end', marginBottom: '0' } }, saveBtn))),
+        recentPayments(ctx.recentPayments)));
+  }
+
+  /** ผลการบันทึก: แสดงแทนฟอร์ม */
+  function showSuccess(s, res) {
+    var p = res.payment;
+    var allocated = {};
+    p.allocations.forEach(function (al) { allocated[al.assessmentId] = al.amountSatang; });
+    var node = h('div', null,
+      App.pageHead('บันทึกการรับเงินเรียบร้อย', s.fullName + ' · เลขประจำตัว ' + s.studentNo),
+      h('div', { class: 'stack' },
+        res.duplicate ? h('div', { class: 'alert alert-info', text: 'รายการนี้ถูกบันทึกไว้แล้วก่อนหน้า ระบบไม่บันทึกซ้ำ' }) : null,
+        res.warnings.map(function (w) { return h('div', { class: 'alert alert-warning', text: w }); }),
+        h('div', { class: 'card' }, h('div', { class: 'card-body' },
+          h('table', { class: 'kv' }, h('tbody', null,
+            h('tr', null, h('th', { text: 'ใบเสร็จ' }), h('td', { class: 'strong', text: receiptLabel(p) })),
+            h('tr', null, h('th', { text: 'วันที่รับเงิน' }), h('td', { text: App.fmt.dateLong(p.date) })),
+            h('tr', null, h('th', { text: 'จำนวนเงิน' }), h('td', null, h('div', { class: 'strong', text: money(p.amountSatang) }), h('div', { class: 'muted small', text: '(' + bahtText_(p.amountSatang) + ')' }))),
+            h('tr', null, h('th', { text: 'ช่องทาง' }), h('td', { text: p.channel + (p.channelRef ? ' (' + p.channelRef + ')' : '') })),
+            h('tr', null, h('th', { text: 'ผู้รับเงิน' }), h('td', { text: p.receivedByName })),
+            p.note ? h('tr', null, h('th', { text: 'หมายเหตุ' }), h('td', { text: p.note })) : null)),
+          h('h3', { style: { margin: '16px 0 8px' }, text: 'รายการที่ตัดชำระ' }),
+          App.table({
+            rows: res.assessments,
+            columns: [
+              { label: 'รายการ', key: 'label' },
+              { label: 'ตัดชำระครั้งนี้', className: 'num', render: function (a) { return formatSatang_(allocated[a.assessmentId] || 0); } },
+              { label: 'คงเหลือ', className: 'num', render: function (a) { return formatSatang_(a.outstandingSatang); } },
+              { label: 'สถานะ', render: function (a) { return App.badge(a.stateLabel, App.KIND.PAY_STATE[a.state]); } },
+            ],
+          }),
+          h('p', { class: 'strong', style: { marginTop: '12px' }, text: 'ยอดค้างคงเหลือทั้งหมดของนักเรียนคนนี้ ' + money(res.outstandingSatang) }),
+          h('div', { class: 'toolbar', style: { marginBottom: '0' } },
+            button('รับเงินรายถัดไป', '', function () { App.go('payments'); }, 'cash'),
+            res.outstandingSatang > 0 ? button('รับเงินจากนักเรียนคนนี้อีกครั้ง', 'secondary', function () { App.go('payments', { studentId: s.studentId }); }) : null,
+            button('ดูบัญชีนักเรียน', 'secondary', function () { App.go('student-account', { studentId: s.studentId }); }, 'user'))))));
+    var content = clear(document.getElementById('content'));
+    content.appendChild(node);
+    window.scrollTo(0, 0);
+    App.toast('บันทึกการรับเงิน ' + money(p.amountSatang) + ' ใบเสร็จ' + receiptLabel(p) + ' เรียบร้อยแล้ว', 'success');
+  }
+
+  App.defineRoute('payments', {
+    title: 'รับชำระเงิน',
+    roles: ['FINANCE'],
+    menu: { group: 'finance', label: 'รับชำระเงิน', icon: 'cash', order: 10 },
+    render: function (params) {
+      if (params.studentId) return App.api('payments.context', { studentId: params.studentId }).then(renderForm);
+      return Promise.all([App.api('payments.context'), App.api('ledger.students')]).then(function (res) {
+        return renderSearch(res[0], res[1]);
+      });
+    },
+  });
+
+  // ---------------------------------------------------------------------------
+  // รายการรับเงินตามช่วงวันที่
+  // ---------------------------------------------------------------------------
+  App.defineRoute('payment-history', {
+    title: 'รายการรับเงิน',
+    roles: VIEW,
+    menu: { group: 'finance', label: 'รายการรับเงิน', icon: 'list', order: 20 },
+    render: function (params) {
+      return App.api('payments.list', { fromDate: params.fromDate, toDate: params.toDate }).then(function (data) {
+        var from = App.field({ label: 'ตั้งแต่วันที่', type: 'date', value: data.fromDate });
+        var to = App.field({ label: 'ถึงวันที่', type: 'date', value: data.toDate });
+        var show = button('แสดง', '', function () { App.go('payment-history', { fromDate: from.get(), toDate: to.get() }); }, 'search');
+        var today = todayIsoLocal();
+        var quick = h('div', { class: 'toolbar', style: { marginBottom: '12px' } },
+          button('วันนี้', 'secondary btn-sm', function () { App.go('payment-history', { fromDate: today, toDate: today }); }),
+          button('เดือนนี้', 'secondary btn-sm', function () { App.go('payment-history', { fromDate: today.slice(0, 8) + '01', toDate: today }); }));
+        var t = data.totals;
+        var summary = h('div', { class: 'toolbar', style: { gap: '8px', marginBottom: '12px' } },
+          App.badge(t.count + ' ฉบับ รวม ' + money(t.totalSatang), 'success'),
+          t.byChannel.map(function (c) { return App.badge(c.channel + ' ' + money(c.totalSatang), 'FINANCE'); }));
+        var period = data.fromDate === data.toDate ? 'วันที่ ' + App.fmt.dateLong(data.fromDate)
+          : App.fmt.dateLong(data.fromDate) + ' ถึง ' + App.fmt.dateLong(data.toDate);
+        return h('div', null,
+          App.pageHead('รายการรับเงิน', period + ' · เรียงตามวันที่และเลขที่ใบเสร็จ'),
+          h('div', { class: 'card' }, h('div', { class: 'card-body' },
+            h('div', { class: 'toolbar filter-bar' }, from.wrap, to.wrap, h('div', { class: 'field', style: { alignSelf: 'end' } }, show)),
+            quick, summary,
+            App.table({
+              rows: data.rows,
+              onRowClick: function (r) {
+                App.go('student-account', { studentId: r.studentId, back: 'payment-history', backParams: { fromDate: data.fromDate, toDate: data.toDate } });
+              },
+              empty: 'ไม่มีการรับเงินในช่วงวันที่นี้',
+              columns: [
+                { label: 'วันที่', className: 'nowrap', render: function (r) { return App.fmt.date(r.date); } },
+                { label: 'ใบเสร็จ', className: 'nowrap', render: receiptLabel },
+                { label: 'เลขประจำตัว', render: function (r) { return h('span', { class: 'mono', text: r.studentNo }); } },
+                { label: 'ชื่อ-นามสกุล', key: 'studentName' },
+                { label: 'จำนวนเงิน', className: 'num', render: function (r) { return h('span', { class: 'strong', text: formatSatang_(r.amountSatang) }); } },
+                { label: 'ช่องทาง', render: function (r) { return [h('div', { text: r.channel }), r.channelRef ? h('div', { class: 'muted small', text: r.channelRef }) : null]; } },
+                { label: 'ผู้รับเงิน', key: 'receivedByName' },
+                { label: 'สถานะ', render: function (r) { return App.badge(r.statusLabel, App.KIND.ACTIVE[r.status]); } },
+              ],
+            }))));
+      });
+    },
+  });
+
+  /** วันที่วันนี้ตามเวลาเครื่อง (ใช้กับปุ่มลัดเท่านั้น Server ใช้เวลาของตนเอง) */
+  function todayIsoLocal() {
+    var d = new Date();
+    var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate());
+  }
+
+  // ---------------------------------------------------------------------------
+  // ทะเบียนเล่มใบเสร็จ
+  // ---------------------------------------------------------------------------
+  function openBookForm(book) {
+    var editing = !!book;
+    App.formModal({
+      title: editing ? 'แก้ไขเล่มใบเสร็จ ' + book.bookNo : 'ลงทะเบียนเล่มใบเสร็จ',
+      intro: h('div', { class: 'alert alert-info', text: 'กรอกตามเล่มจริง: ตรวจเลขที่ใบแรกและใบสุดท้ายของเล่ม แก้ไขได้จนกว่าจะเริ่มใช้เล่ม' }),
+      fields: [
+        { key: 'bookNo', label: 'เลขเล่ม', required: true, maxlength: 30, value: editing ? book.bookNo : '', help: 'ตามที่พิมพ์บนเล่ม เช่น 12 หรือ 12/2569' },
+        { key: 'receivedDate', label: 'วันที่ได้รับเล่ม', type: 'date', value: editing ? book.receivedDate : '' },
+        { key: 'startNo', label: 'เลขที่ใบแรก', type: 'number', required: true, inputmode: 'numeric', min: 1, value: editing ? book.startNo : '' },
+        { key: 'endNo', label: 'เลขที่ใบสุดท้าย', type: 'number', required: true, inputmode: 'numeric', min: 1, value: editing ? book.endNo : '' },
+        { key: 'note', label: 'หมายเหตุ', maxlength: 300, span2: true, value: editing ? book.note : '' },
+      ],
+      submitLabel: editing ? 'บันทึก' : 'ลงทะเบียน',
+      onSubmit: function (v) {
+        var payload = { bookNo: v.bookNo, startNo: v.startNo, endNo: v.endNo, receivedDate: v.receivedDate, note: v.note };
+        if (editing) {
+          payload.bookId = book.bookId;
+          return App.api('receipts.updateBook', payload);
+        }
+        return App.api('receipts.registerBook', payload);
+      },
+      onDone: function (b) {
+        App.toast((editing ? 'บันทึกเล่มที่ ' : 'ลงทะเบียนเล่มที่ ') + b.bookNo + ' (เลขที่ ' + b.startNo + '–' + b.endNo + ') เรียบร้อยแล้ว', 'success');
+        App.refresh();
+      },
+    });
+  }
+
+  function activateBook(book) {
+    App.confirm('เปิดใช้เล่มที่ ' + book.bookNo + ' (เลขที่ ' + book.startNo + '–' + book.endNo + ') เป็นเล่มที่กำลังใช้? เปิดใช้ได้ครั้งละ 1 เล่ม และต้องใช้ให้ครบเล่มก่อนเปิดเล่มใหม่',
+      { title: 'เปิดใช้เล่มใบเสร็จ', confirmLabel: 'เปิดใช้เล่มนี้' }).then(function (yes) {
+      if (!yes) return;
+      App.api('receipts.activateBook', { bookId: book.bookId }).then(function (b) {
+        App.toast('เปิดใช้เล่มที่ ' + b.bookNo + ' แล้ว เลขที่ถัดไปคือ ' + b.nextNo, 'success');
+        App.refresh();
+      }).catch(App.fail);
+    });
+  }
+
+  App.defineRoute('receipt-books', {
+    title: 'เล่มใบเสร็จ',
+    roles: VIEW,
+    menu: { group: 'finance', label: 'เล่มใบเสร็จ', icon: 'book', order: 40 },
+    render: function () {
+      return App.api('receipts.books').then(function (data) {
+        var active = data.books.filter(function (b) { return b.status === 'ACTIVE'; })[0] || null;
+        var columns = [
+          { label: 'เลขเล่ม', render: function (b) { return h('span', { class: 'strong', text: b.bookNo }); } },
+          { label: 'เลขที่', className: 'nowrap', render: function (b) { return b.startNo + '–' + b.endNo; } },
+          { label: 'สถานะ', render: function (b) { return App.badge(b.statusLabel, App.KIND.BOOK[b.status]); } },
+          { label: 'ใช้แล้ว', className: 'num', render: function (b) { return String(b.usedCount); } },
+          { label: 'ยกเลิก', className: 'num', render: function (b) { return String(b.cancelledCount); } },
+          { label: 'คงเหลือ', className: 'num', render: function (b) { return h('span', { class: b.low ? 'text-danger strong' : '', text: String(b.remaining) }); } },
+          { label: 'เลขที่ถัดไป', className: 'num', render: function (b) { return b.nextNo === null ? '–' : h('span', { class: 'strong', text: String(b.nextNo) }); } },
+          { label: 'เริ่มใช้', className: 'nowrap', render: function (b) { return b.startUseDate ? App.fmt.date(b.startUseDate) : '–'; } },
+          { label: 'ผู้รับผิดชอบ', key: 'responsibleName' },
+        ];
+        if (data.canManage) {
+          columns.push({ label: 'จัดการ', className: 'actions', render: function (b) {
+            if (b.status !== 'REGISTERED') return null;
+            return [
+              !data.hasActive ? button('เปิดใช้', 'primary btn-sm', function () { activateBook(b); }, 'play') : null,
+              button('แก้ไข', 'secondary btn-sm', function () { openBookForm(b); }, 'edit'),
+            ];
+          } });
+        }
+        var notes = [];
+        if (!active) {
+          notes.push(h('div', { class: 'alert alert-warning', text: data.books.some(function (b) { return b.status === 'REGISTERED'; })
+            ? 'ยังไม่มีเล่มที่กำลังใช้ กด "เปิดใช้" ที่เล่มที่ต้องการใช้ก่อนรับเงิน'
+            : 'ยังไม่มีเล่มใบเสร็จ กด "ลงทะเบียนเล่มใหม่" แล้วกรอกเลขเล่มและเลขที่ตามเล่มจริง' }));
+        } else {
+          if (active.low) notes.push(h('div', { class: 'alert alert-warning', text: 'เล่มที่ ' + active.bookNo + ' เหลือ ' + active.remaining + ' ฉบับ กรุณาลงทะเบียนเล่มใหม่เตรียมไว้' }));
+          if (active.gaps.length) {
+            notes.push(h('div', { class: 'alert alert-warning', text: 'เลขที่ขาดช่วงในเล่มที่ ' + active.bookNo + ': ' + active.gaps.join(', ') +
+              ' (ยังไม่ได้บันทึกรับเงินและยังไม่ได้ยกเลิก ต้องตรวจสอบกับใบเสร็จจริง)' }));
+          }
+        }
+        return h('div', null,
+          App.pageHead('ทะเบียนเล่มใบเสร็จรับเงิน', 'ระบบไม่ออกเลขใบเสร็จเอง ใช้เลขที่ตามเล่มจริงที่ลงทะเบียนไว้ เปิดใช้ได้ครั้งละ 1 เล่ม' +
+            (data.strict ? ' · ใช้เลขที่เรียงลำดับ' : ''),
+            data.canManage ? [button('ลงทะเบียนเล่มใหม่', '', function () { openBookForm(null); }, 'plus')] : []),
+          active ? bookBanner(active, data.strict) : null,
+          notes.length ? h('div', { class: 'stack', style: { marginBottom: '16px' } }, notes) : null,
+          h('div', { class: 'card' }, h('div', { class: 'card-body' }, App.table({
+            rows: data.books,
+            columns: columns,
+            empty: 'ยังไม่มีเล่มใบเสร็จในระบบ',
+          }))));
+      });
+    },
+  });
+})();
+</script>

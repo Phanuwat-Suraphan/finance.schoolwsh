@@ -73,6 +73,15 @@
     upload: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M17 8l-5-5-5 5M12 3v12',
     arrowUp: 'M12 19V5M5 12l7-7 7 7',
     flag: 'M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1zM4 22v-7',
+    cash: 'M2 6h20v12H2zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 12h.01M18 12h.01',
+    tag: 'M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82zM7 7h.01',
+    book: 'M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2zM9 7h7M9 11h5',
+    list: 'M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01',
+    checkSquare: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11',
+    check: 'M20 6L9 17l-5-5',
+    user: 'M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8z',
+    play: 'M5 3l14 9-14 9V3z',
+    arrowLeft: 'M19 12H5M12 19l-7-7 7-7',
   };
 
   App.icon = function (name) {
@@ -107,6 +116,43 @@
 
   App.roleBadge = function (role) {
     return App.badge(App.ROLE_LABELS[role] || role, role);
+  };
+
+  /** สีป้ายสถานะการเงิน */
+  App.KIND = {
+    PAY_STATE: { UNPAID: 'danger', PARTIAL: 'warning', PAID: 'success', EXEMPT: 'FINANCE', CANCELLED: 'muted' },
+    DECISION: { PENDING: 'warning', APPROVED: 'success', REJECTED: 'danger', WITHDRAWN: 'muted' },
+    BOOK: { ACTIVE: 'success', REGISTERED: 'FINANCE', FULL: 'muted', CLOSED: 'muted' },
+    ACTIVE: { ACTIVE: 'success', INACTIVE: 'muted', REVOKED: 'muted', VOIDED: 'danger', REPLACED: 'muted' },
+  };
+
+  /** ปุ่ม: kind = '' (หลัก) / secondary / danger / ghost และต่อท้าย btn-sm ได้ */
+  App.button = function (label, kind, onClick, iconName) {
+    var btn = h('button', { type: 'button', class: 'btn' + (kind ? ' btn-' + kind : '') }, iconName ? App.icon(iconName) : null, label);
+    btn.addEventListener('click', onClick);
+    return btn;
+  };
+
+  /** หัวหน้า: ชื่อ คำอธิบาย และปุ่มด้านขวา */
+  App.pageHead = function (title, description, actions) {
+    return h('div', { class: 'page-head' },
+      h('div', null, h('h1', { text: title }), description ? h('p', { text: description }) : null),
+      actions && actions.length ? h('div', { class: 'toolbar', style: { marginBottom: '0' } }, actions) : null);
+  };
+
+  /** การ์ดตัวเลขสรุป */
+  App.statCard = function (label, value, sub, kind) {
+    return h('div', { class: 'card stat' + (kind ? ' stat-' + kind : '') },
+      h('div', { class: 'stat-label', text: label }),
+      h('div', { class: 'stat-value', text: value }),
+      sub ? h('div', { class: 'stat-sub', text: sub }) : null);
+  };
+
+  /** รหัสคำขอสำหรับกันการบันทึกซ้ำ (สร้างใหม่ทุกครั้งที่เปิดฟอร์ม และใช้ค่าเดิมเมื่อกดบันทึกซ้ำ) */
+  App.newRequestKey = function () {
+    var bytes = new Uint8Array(16);
+    window.crypto.getRandomValues(bytes);
+    return 'req-' + Array.prototype.map.call(bytes, function (b) { return (b < 16 ? '0' : '') + b.toString(16); }).join('');
   };
 
   // ---------------------------------------------------------------------------
@@ -259,6 +305,23 @@
   App.field = function (o) {
     var id = 'f' + (++fieldSeq);
     var input;
+    if (o.type === 'checkgroup') {
+      // เลือกได้หลายค่า: get() คืนค่ารายการที่ติ๊ก
+      var boxes = (o.options || []).map(function (opt) {
+        var cb = h('input', { type: 'checkbox', value: opt.value, checked: (o.value || []).indexOf(opt.value) !== -1, disabled: o.disabled });
+        return { cb: cb, label: h('label', null, cb, h('span', { text: opt.label })) };
+      });
+      var group = h('div', { class: 'check-grid', role: 'group', 'aria-labelledby': id + '-label' }, boxes.map(function (b) { return b.label; }));
+      var wrapG = h('div', { class: 'field' + (o.span2 ? ' span-2' : '') },
+        h('div', { class: 'field-label', id: id + '-label' }, o.label, o.required ? h('span', { class: 'req', text: ' *', 'aria-hidden': 'true' }) : null),
+        group, o.help ? h('div', { class: 'help', text: o.help }) : null);
+      return {
+        wrap: wrapG,
+        input: boxes.length ? boxes[0].cb : group,
+        boxes: boxes.map(function (b) { return b.cb; }),
+        get: function () { return boxes.filter(function (b) { return b.cb.checked; }).map(function (b) { return b.cb.value; }); },
+      };
+    }
     if (o.type === 'checkbox') {
       input = h('input', { id: id, type: 'checkbox', checked: !!o.value, disabled: o.disabled });
       var wrapC = h('div', { class: 'field' + (o.span2 ? ' span-2' : '') },
@@ -337,8 +400,8 @@
       for (var i = 0; i < opts.fields.length; i++) {
         var spec = opts.fields[i];
         var v = values[spec.key];
-        if (spec.required && spec.type !== 'checkbox' && (v === null || v === undefined || String(v).trim() === '')) {
-          errorBox.textContent = (spec.type === 'select' ? 'กรุณาเลือก' : 'กรุณากรอก') + spec.label;
+        if (spec.required && spec.type !== 'checkbox' && !built[i].input.disabled && (v === null || v === undefined || String(v).trim() === '')) {
+          errorBox.textContent = (spec.type === 'select' || spec.type === 'checkgroup' ? 'กรุณาเลือก' : 'กรุณากรอก') + spec.label;
           errorBox.classList.remove('hidden');
           built[i].input.focus();
           return;
@@ -375,9 +438,15 @@
       body: [intro, errorBox, form],
       actions: [
         { label: 'ยกเลิก', kind: 'secondary' },
-        { label: opts.submitLabel || 'บันทึก', onClick: function () { submit(); } },
+        { label: opts.submitLabel || 'บันทึก', kind: opts.submitKind, onClick: function () { submit(); } },
       ],
     });
+    // ให้ฟอร์มปรับช่องตามค่าที่เลือกได้ เช่น ยกเว้นทั้งจำนวน = ปิดช่องจำนวนเงิน
+    if (opts.onReady) {
+      var byKey = {};
+      built.forEach(function (b) { byKey[b.key] = b; });
+      opts.onReady(byKey, modal);
+    }
     return modal;
   };
 
@@ -437,7 +506,9 @@
       var items = App.routeOrder.filter(function (name) {
         var r = App.routes[name];
         return r.menu && r.menu.group === group.key && App.canAccess(name);
-      });
+      }).map(function (name, i) { return { name: name, i: i, order: App.routes[name].menu.order || 100 }; })
+        .sort(function (a, b) { return a.order - b.order || a.i - b.i; })
+        .map(function (x) { return x.name; });
       if (!items.length) return;
       nav.appendChild(h('div', { class: 'nav-group' },
         h('div', { class: 'nav-group-label', text: group.label }),
@@ -486,6 +557,7 @@
     if (!App.routes[name]) name = 'home';
     if (!document.getElementById('shell')) App.renderShell();
     App.state.route = name;
+    App.state.params = params || {};
     var route = App.routes[name];
     document.getElementById('page-title').textContent = route.title;
     document.title = route.title + ' · ' + BOOT.appName;
@@ -515,7 +587,8 @@
       });
   };
 
-  App.refresh = function () { App.go(App.state.route); };
+  /** โหลดหน้าปัจจุบันใหม่ด้วยพารามิเตอร์เดิม (เช่น หลังบันทึกข้อมูล) */
+  App.refresh = function () { App.go(App.state.route, App.state.params); };
 
   /** โหลดข้อมูลผู้ใช้ปัจจุบันแล้วเปิดหน้าหลัก (หรือหน้าบังคับเปลี่ยนรหัสผ่าน) */
   App.loadMe = function (route) {

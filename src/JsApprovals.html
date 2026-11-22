@@ -1,0 +1,132 @@
+<script>
+/* ==========================================================================
+   JsApprovals — คำขออนุมัติ (ระยะที่ 4)
+   ผู้อำนวยการพิจารณา / เจ้าหน้าที่การเงินติดตามผลและถอนคำขอของตนเอง
+   Server ตรวจสิทธิ์ ตรวจว่าไม่ใช่ผู้ยื่นเอง และตรวจยอดเงินล่าสุดอีกครั้งตอนอนุมัติ
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var button = App.button;
+  var money = App.fmt.money;
+
+  App.state.approvalFilter = 'PENDING';
+
+  function openDecision(r) {
+    var note = App.field({ label: 'ความเห็น (ต้องกรอกเมื่อไม่อนุมัติ)', type: 'textarea', maxlength: 500, span2: true });
+    var errorBox = h('div', { class: 'alert alert-error hidden', role: 'alert' });
+    var busy = false;
+    function decide(decision, btn, close) {
+      if (busy) return;
+      errorBox.classList.add('hidden');
+      if (decision === 'REJECT' && !note.get().trim()) {
+        errorBox.textContent = 'กรุณากรอกเหตุผลที่ไม่อนุมัติ';
+        errorBox.classList.remove('hidden');
+        note.input.focus();
+        return;
+      }
+      busy = true;
+      var label = btn.textContent;
+      btn.disabled = true;
+      btn.textContent = 'กำลังบันทึก…';
+      App.api('approvals.decide', { requestId: r.requestId, decision: decision, note: note.get() }).then(function (res) {
+        close();
+        App.toast(res.message, 'success');
+        App.refresh();
+      }).catch(function (err) {
+        busy = false;
+        btn.disabled = false;
+        btn.textContent = label;
+        errorBox.textContent = (err && err.message) || 'บันทึกไม่สำเร็จ กรุณาลองใหม่';
+        errorBox.classList.remove('hidden');
+      });
+    }
+    App.modal({
+      title: 'พิจารณาคำขอ: ' + r.typeLabel,
+      size: 'lg',
+      body: [
+        h('table', { class: 'kv' }, h('tbody', null,
+          h('tr', null, h('th', { text: 'นักเรียน' }), h('td', { text: r.studentName ? r.studentName + ' (เลขประจำตัว ' + r.studentNo + ')' : '–' })),
+          h('tr', null, h('th', { text: 'รายละเอียด' }), h('td', { class: 'strong', text: r.summary })),
+          r.amountSatang !== null ? h('tr', null, h('th', { text: 'จำนวนเงิน' }), h('td', { text: money(r.amountSatang) })) : null,
+          h('tr', null, h('th', { text: 'เหตุผลของผู้ขอ' }), h('td', { text: r.reason })),
+          r.referenceDoc ? h('tr', null, h('th', { text: 'เอกสารอ้างอิง' }), h('td', { text: r.referenceDoc })) : null,
+          h('tr', null, h('th', { text: 'ผู้ขอ' }), h('td', { text: r.requestedByName + ' · ' + App.fmt.datetime(r.createdAt) })))),
+        h('div', { class: 'alert alert-info', style: { margin: '12px 0' },
+          text: 'ตรวจเหตุผลและเอกสารอ้างอิงก่อนอนุมัติ ระบบจะตรวจยอดเงินล่าสุดอีกครั้งตอนอนุมัติ ถ้ายอดเปลี่ยนไปแล้วจะอนุมัติไม่ได้' }),
+        note.wrap,
+        errorBox,
+        r.studentId ? h('p', { class: 'small' }, button('ดูบัญชีนักเรียนคนนี้', 'ghost btn-sm', function () {
+          App.clearOverlays();
+          App.go('student-account', { studentId: r.studentId, back: 'approvals' });
+        }, 'user')) : null,
+      ],
+      actions: [
+        { label: 'ปิด', kind: 'secondary' },
+        { label: 'ไม่อนุมัติ', kind: 'danger', onClick: function (btn, close) { decide('REJECT', btn, close); } },
+        { label: 'อนุมัติ', onClick: function (btn, close) { decide('APPROVE', btn, close); } },
+      ],
+    });
+  }
+
+  function withdraw(r) {
+    App.confirm('ถอนคำขอ "' + r.summary + '" ใช่หรือไม่? ข้อมูลเดิมจะไม่เปลี่ยนแปลง', { title: 'ถอนคำขอ', confirmLabel: 'ถอนคำขอ', danger: true })
+      .then(function (yes) {
+        if (!yes) return;
+        App.api('approvals.withdraw', { requestId: r.requestId }).then(function (res) {
+          App.toast(res.message, 'success');
+          App.refresh();
+        }).catch(App.fail);
+      });
+  }
+
+  App.defineRoute('approvals', {
+    title: 'คำขออนุมัติ',
+    roles: ['FINANCE', 'DIRECTOR'],
+    menu: { group: 'finance', label: 'คำขออนุมัติ', icon: 'checkSquare', order: 50 },
+    render: function () {
+      var filter = App.state.approvalFilter;
+      return App.api('approvals.list', { status: filter }).then(function (data) {
+        function tab(value, label) {
+          var b = button(label, 'secondary btn-sm', function () {
+            App.state.approvalFilter = value;
+            App.refresh();
+          });
+          b.setAttribute('aria-pressed', String(filter === value));
+          return b;
+        }
+        var columns = [
+          { label: 'วันที่ขอ', className: 'nowrap', render: function (r) { return App.fmt.datetime(r.createdAt); } },
+          { label: 'ประเภท', key: 'typeLabel' },
+          { label: 'รายละเอียด', render: function (r) { return [h('div', { text: r.summary }), h('div', { class: 'muted small', text: 'เหตุผล: ' + r.reason })]; } },
+          { label: 'ผู้ขอ', key: 'requestedByName' },
+          { label: 'สถานะ', render: function (r) {
+            return [App.badge(r.statusLabel, App.KIND.DECISION[r.status]),
+              r.decidedByName && r.status !== 'PENDING' ? h('div', { class: 'muted small', text: r.decidedByName + (r.decisionNote ? ': ' + r.decisionNote : '') }) : null];
+          } },
+          { label: 'จัดการ', className: 'actions', render: function (r) {
+            if (r.status !== 'PENDING') return null;
+            if (data.canDecide) return button('พิจารณา', 'primary btn-sm', function () { openDecision(r); }, 'checkSquare');
+            if (r.requestedBy === data.me) return button('ถอนคำขอ', 'ghost btn-sm', function () { withdraw(r); });
+            return null;
+          } },
+        ];
+        return h('div', null,
+          App.pageHead('คำขออนุมัติ', data.canDecide
+            ? 'คำขอลดหย่อน ยกเว้น และยกเลิกรายการเรียกเก็บ ที่รอผู้อำนวยการพิจารณา (รายการเก่าอยู่บนสุด)'
+            : 'ติดตามผลคำขอที่ยื่นไว้ ระหว่างรออนุมัติ ยอดเงินเดิมยังมีผลตามเดิม'),
+          h('div', { class: 'tabs', role: 'group', 'aria-label': 'ตัวกรองคำขอ' },
+            tab('PENDING', 'รออนุมัติ (' + data.pendingCount + ')'),
+            tab('ALL', 'ทั้งหมด')),
+          h('div', { class: 'card' }, h('div', { class: 'card-body' }, App.table({
+            rows: data.rows,
+            columns: columns,
+            onRowClick: data.canDecide ? function (r) { if (r.status === 'PENDING') openDecision(r); } : null,
+            empty: filter === 'PENDING' ? 'ไม่มีคำขอที่รออนุมัติ' : 'ยังไม่มีคำขอ',
+          }))));
+      });
+    },
+  });
+})();
+</script>

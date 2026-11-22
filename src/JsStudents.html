@@ -136,9 +136,11 @@
               { label: 'หมายเหตุ', key: 'note' },
             ],
           }),
-          h('p', { class: 'muted small', text: 'ประวัติการเรียกเก็บและการชำระเงินจะแสดงที่นี่เมื่อเปิดใช้ระยะที่ 4' }),
         ],
-        actions: [{ label: 'ปิด', kind: 'secondary' }],
+        actions: [
+          { label: 'ปิด', kind: 'secondary' },
+          { label: 'ดูบัญชีการเงิน', onClick: function (b, close) { close(); App.go('student-account', { studentId: s.studentId }); } },
+        ],
       });
     }).catch(App.fail);
   }
