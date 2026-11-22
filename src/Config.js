@@ -26,8 +26,8 @@ const APP = Object.freeze({
   NAME: 'ระบบบริหารจัดเก็บเงินบำรุงการศึกษา',
   SCHOOL_NAME: 'โรงเรียนวัดเสาหิน',
   PROVINCE: 'เชียงใหม่',
-  VERSION: '0.7.1',
-  RELEASE: 'ระยะที่ 7: Dashboard รายงาน และการสำรองข้อมูล',
+  VERSION: '1.0.0',
+  RELEASE: 'ระยะที่ 8: ทดสอบระบบทั้งหมด พร้อมทดสอบใช้งานจริง',
   SCHEMA_VERSION: 1,
   TIMEZONE: 'Asia/Bangkok',
 });

@@ -693,6 +693,14 @@ async function main() {
     await nav(a, 'ประวัติการใช้งาน');
     await a.locator('.data-table tbody tr', { hasText: 'กู้คืนข้อมูล' }).first().waitFor();
     check(true, 'ประวัติการใช้งานบันทึกการกู้คืนข้อมูล');
+
+    // ------------------------------------------------------------------ ระยะที่ 8: ตรวจความถูกต้องของข้อมูล
+    await nav(a, 'ตรวจความถูกต้องของข้อมูล');
+    await a.getByRole('button', { name: 'ตรวจตอนนี้' }).click();
+    await a.getByText('ถูกต้องทั้งหมด 8 ข้อ').waitFor();
+    check((await a.locator('.badge', { hasText: '✓ ผ่าน' }).count()) === 8, 'ตรวจความถูกต้องของข้อมูลหลังใช้งานครบทุกขั้นตอน (รวมกู้คืน): ผ่านครบ 8 ข้อ');
+    await a.locator('.toast').first().click().catch(() => {});
+    await shot(a, '41-integrity', true);
     await adm.context.close();
     await fin2.context.close();
   } finally {
