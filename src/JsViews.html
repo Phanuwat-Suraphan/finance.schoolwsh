@@ -66,36 +66,47 @@
       notice.textContent = text;
     }
     function onLoggedIn(result) {
-      App.session.set(result.token);
+      App.session.set(result.token, result.remember === true);
       return App.loadMe();
     }
+    var stayIn = BOOT.allowRemember ? App.field({
+      label: 'อยู่ในระบบต่อในเครื่องนี้ (ปิดเบราว์เซอร์แล้วไม่ต้องเข้าสู่ระบบใหม่)', type: 'checkbox',
+      help: 'เลือกเฉพาะเครื่องส่วนตัว ห้ามเลือกในเครื่องที่ใช้ร่วมกัน ระบบยังออกจากระบบเองเมื่อครบอายุการเข้าสู่ระบบที่ผู้ดูแลระบบกำหนด',
+    }) : null;
 
     if (BOOT.authMode === 'GOOGLE') {
       var googleBtn = h('button', { type: 'button', class: 'btn btn-block', text: 'เข้าสู่ระบบด้วยบัญชี Google ของโรงเรียน' });
       googleBtn.addEventListener('click', function () {
         googleBtn.disabled = true;
-        App.api('auth.loginGoogle').then(onLoggedIn).catch(function (err) {
+        App.api('auth.loginGoogle', { remember: stayIn ? stayIn.get() : false }).then(onLoggedIn).catch(function (err) {
           googleBtn.disabled = false;
           showError(err.message);
         });
       });
       authPage(BOOT.schoolName, BOOT.appName, [notice,
-        h('p', { class: 'muted small', text: 'ระบบจะใช้บัญชี Google ที่เข้าสู่ระบบอยู่ในเบราว์เซอร์นี้' }), googleBtn]);
+        h('p', { class: 'muted small', text: 'ระบบจะใช้บัญชี Google ที่เข้าสู่ระบบอยู่ในเบราว์เซอร์นี้' }), stayIn ? stayIn.wrap : null, googleBtn]);
       return;
     }
 
-    var username = App.field({ label: 'ชื่อผู้ใช้', autocomplete: 'username', autocapitalize: 'none', mono: true });
+    var savedName = App.session.rememberedUsername();
+    var username = App.field({ label: 'ชื่อผู้ใช้', autocomplete: 'username', autocapitalize: 'none', mono: true, value: savedName });
     var password = App.passwordField({ label: 'รหัสผ่าน', autocomplete: 'current-password' });
+    var keepName = App.field({ label: 'จดจำชื่อผู้ใช้ในเครื่องนี้', type: 'checkbox', value: true });
     var submit = h('button', { type: 'submit', class: 'btn btn-block', text: 'เข้าสู่ระบบ' });
-    var form = h('form', { class: 'stack', novalidate: true }, notice, username.wrap, password.wrap, submit);
+    var form = h('form', { class: 'stack', novalidate: true }, notice, username.wrap, password.wrap,
+      h('div', { class: 'login-options' }, keepName.wrap, stayIn ? stayIn.wrap : null), submit);
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       if (submit.disabled) return;
       submit.disabled = true;
       submit.textContent = 'กำลังตรวจสอบ…';
       notice.classList.add('hidden');
-      App.api('auth.login', { username: username.input.value, password: password.input.value })
-        .then(onLoggedIn)
+      var name = username.input.value.trim();
+      App.api('auth.login', { username: name, password: password.input.value, remember: stayIn ? stayIn.get() : false })
+        .then(function (result) {
+          App.session.rememberUsername(name.toLowerCase(), keepName.get());
+          return onLoggedIn(result);
+        })
         .catch(function (err) {
           password.input.value = '';
           showError(err.message);
@@ -108,7 +119,7 @@
     });
     authPage(BOOT.schoolName, BOOT.appName, [form,
       h('p', { class: 'muted small', text: 'ลืมรหัสผ่าน กรุณาติดต่อผู้ดูแลระบบของโรงเรียน' })]);
-    username.input.focus();
+    (savedName ? password.input : username.input).focus();
   };
 
   // ---------------------------------------------------------------------------

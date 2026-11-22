@@ -145,6 +145,7 @@ function authLimits_() {
   return {
     idleMinutes: getSetting_('SESSION_IDLE_MINUTES'),
     maxHours: getSetting_('SESSION_MAX_HOURS'),
+    allowRemember: getSetting_('SESSION_ALLOW_REMEMBER'),
     maxAttempts: getSetting_('LOGIN_MAX_ATTEMPTS'),
     lockMinutes: getSetting_('LOGIN_LOCK_MINUTES'),
   };
@@ -206,14 +207,21 @@ function sessionKey_(token) {
   return SESSION_KEY_PREFIX_ + sha256Hex_(token);
 }
 
-function createSession_(user, limits) {
+/**
+ * สร้าง session ใหม่
+ * remember = ผู้ใช้เลือก "อยู่ในระบบต่อในเครื่องนี้" (ถ้าผู้ดูแลระบบอนุญาต): ไม่ออกจากระบบเพราะไม่ได้ใช้งาน
+ * จนครบอายุสูงสุดของการเข้าสู่ระบบ (CacheService เก็บได้ไม่เกิน 6 ชั่วโมงนับจากการใช้งานครั้งล่าสุด)
+ */
+function createSession_(user, limits, remember) {
   const token = randomHex_(64).toLowerCase();
   const nowMs = now_().getTime();
-  const idleSeconds = Math.min(AUTH.CACHE_MAX_SECONDS, limits.idleMinutes * 60);
+  const remembered = !!remember && limits.allowRemember === true;
+  const idleSeconds = Math.min(AUTH.CACHE_MAX_SECONDS, remembered ? limits.maxHours * 3600 : limits.idleMinutes * 60);
   const session = {
     uid: user.UserId,
     ver: user.SessionVersion || 0,
     ep: sessionEpoch_(),
+    rem: remembered,
     created: nowMs,
     seen: nowMs,
     idle: idleSeconds,
@@ -278,6 +286,7 @@ function authenticate_(token) {
     displayName: user.DisplayName,
     mustChangePassword: authMode_() === AUTH_MODES.PASSWORD && user.MustChangePassword === true,
     sessionKey: key,
+    remember: session.rem === true,
   };
 }
 
@@ -316,14 +325,19 @@ function userDto_(u) {
  * หลังยืนยันตัวตนสำเร็จ: บันทึกเวลา ประวัติ และสร้าง session
  * rehashPassword = รหัสผ่านที่ต้องแฮชใหม่ด้วยจำนวนรอบปัจจุบัน (null = ไม่ต้อง)
  */
-function completeLogin_(user, rehashPassword, limits) {
+function completeLogin_(user, rehashPassword, limits, remember) {
+  const remembered = remember === true && limits.allowRemember === true;
   const changes = { LastLoginAt: nowIso_() };
   if (rehashPassword !== null) changes.PasswordHash = hashPassword_(rehashPassword);
   dbUpdate_(SHEETS.USERS, user.UserId, changes, actorFromUser_(user), { note: 'ปรับรูปแบบการเก็บรหัสผ่านอัตโนมัติ' });
-  auditAppend_([{ action: AUDIT_ACTIONS.LOGIN, entity: SHEETS.USERS, entityId: user.UserId, note: 'เข้าสู่ระบบสำเร็จ' }], actorFromUser_(user));
+  auditAppend_([{
+    action: AUDIT_ACTIONS.LOGIN, entity: SHEETS.USERS, entityId: user.UserId,
+    note: 'เข้าสู่ระบบสำเร็จ' + (remembered ? ' (เลือกอยู่ในระบบต่อในเครื่องนี้)' : ''),
+  }], actorFromUser_(user));
   const fresh = dbGet_(SHEETS.USERS, user.UserId);
   return {
-    token: createSession_(fresh, limits),
+    token: createSession_(fresh, limits, remembered),
+    remember: remembered,
     user: userDto_(fresh),
     mustChangePassword: authMode_() === AUTH_MODES.PASSWORD && fresh.MustChangePassword === true,
   };
@@ -368,11 +382,11 @@ function authLogin_(ctx, payload) {
     throw appError_(ERROR_CODES.UNAUTHENTICATED, 'บัญชีนี้ถูกปิดการใช้งาน กรุณาติดต่อผู้ดูแลระบบ');
   }
   clearLoginFailures_(username);
-  return completeLogin_(user, needsRehash ? password : null, limits);
+  return completeLogin_(user, needsRehash ? password : null, limits, payload.remember === true);
 }
 
 /** auth.loginGoogle — โหมดบัญชี Google ของโรงเรียน (ใช้อีเมลที่ Google ยืนยันแล้ว) */
-function authLoginGoogle_() {
+function authLoginGoogle_(ctx, payload) {
   if (authMode_() !== AUTH_MODES.GOOGLE) {
     throw appError_(ERROR_CODES.FORBIDDEN, 'ระบบนี้ตั้งค่าให้เข้าสู่ระบบด้วยชื่อผู้ใช้และรหัสผ่าน');
   }
@@ -385,7 +399,7 @@ function authLoginGoogle_() {
     auditLoginFailure_(user, user ? 'บัญชีถูกปิดการใช้งาน' : 'บัญชี Google ที่ยังไม่ได้รับสิทธิ์ใช้งาน');
     throw appError_(ERROR_CODES.FORBIDDEN, 'บัญชีนี้ยังไม่ได้รับสิทธิ์ใช้งานระบบ กรุณาติดต่อผู้ดูแลระบบ');
   }
-  return completeLogin_(user, null, authLimits_());
+  return completeLogin_(user, null, authLimits_(), !!payload && payload.remember === true);
 }
 
 /** auth.me — ข้อมูลผู้ใช้และโรงเรียนสำหรับหน้าเว็บ */
@@ -433,5 +447,5 @@ function authChangePassword_(ctx, payload) {
   }, actorFromCtx_(ctx), { action: AUDIT_ACTIONS.PASSWORD_CHANGE, note: 'เปลี่ยนรหัสผ่านด้วยตนเอง' });
   CacheService.getScriptCache().remove(ctx.sessionKey);
   const fresh = dbGet_(SHEETS.USERS, user.UserId);
-  return { token: createSession_(fresh, limits), user: userDto_(fresh), mustChangePassword: false };
+  return { token: createSession_(fresh, limits, ctx.remember), remember: ctx.remember === true && limits.allowRemember === true, user: userDto_(fresh), mustChangePassword: false };
 }

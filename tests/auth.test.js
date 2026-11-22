@@ -209,3 +209,44 @@ test('โหมดบัญชี Google: ใช้อีเมลที่ Goog
   h.setUsers('', 'owner@example.com');
   assert.equal(h.api('auth.loginGoogle').error.code, 'UNAUTHENTICATED');
 });
+
+test('จดจำการเข้าสู่ระบบ: อยู่ในระบบต่อได้จนครบอายุสูงสุด ผู้ดูแลระบบปิดได้ และเปลี่ยนรหัสผ่านแล้วยังจำแบบเดิม', () => {
+  const h = createAppEnv();
+  const login = (remember) => h.ok('auth.login', { username: 'admin', password: h.admin.password, remember });
+  const normal = login(false);
+  const kept = login(true);
+  assert.equal(normal.remember, false);
+  assert.equal(kept.remember, true);
+  assert.ok(h.auditRows().some((r) => r.Action === 'LOGIN' && /อยู่ในระบบต่อในเครื่องนี้/.test(r.Note)), 'ประวัติบอกว่าเลือกอยู่ในระบบต่อ');
+
+  // ไม่ได้ใช้งาน 2 ชั่วโมง: แบบปกติ (30 นาที) หมดเวลา แบบจดจำยังใช้ได้
+  h.setNow('2026-11-21T12:00:00+07:00');
+  assert.equal(h.api('auth.me', {}, normal.token).error.code, 'UNAUTHENTICATED');
+  assert.equal(h.api('auth.me', {}, kept.token).ok, true);
+  // ครบอายุสูงสุด 8 ชั่วโมงนับจากเข้าสู่ระบบ: ต้องเข้าสู่ระบบใหม่เสมอ แม้ใช้งานอยู่
+  h.setNow('2026-11-21T15:00:00+07:00');
+  assert.equal(h.api('auth.me', {}, kept.token).ok, true);
+  h.setNow('2026-11-21T18:01:00+07:00');
+  assert.match(h.api('auth.me', {}, kept.token).error.message, /ครบเวลาการเข้าสู่ระบบสูงสุด/);
+
+  // ไม่ได้ใช้งานเกิน 6 ชั่วโมง (ขีดจำกัดของ CacheService) ก็ต้องเข้าสู่ระบบใหม่
+  const kept2 = login(true);
+  h.setNow('2026-11-22T00:02:00+07:00');
+  assert.equal(h.api('auth.me', {}, kept2.token).error.code, 'UNAUTHENTICATED');
+
+  // เปลี่ยนรหัสผ่านแล้ว token ใหม่ยังเป็นแบบจดจำ
+  const kept3 = login(true);
+  const changed = h.ok('auth.changePassword', { currentPassword: h.admin.password, newPassword: 'NewPass2569x' }, kept3.token);
+  assert.equal(changed.remember, true);
+  h.setNow('2026-11-22T02:00:00+07:00');
+  assert.equal(h.api('auth.me', {}, changed.token).ok, true);
+
+  // ผู้ดูแลระบบปิดตัวเลือกนี้: ระบบไม่จดจำแม้ผู้ใช้เลือก
+  h.ok('settings.update', { values: { SESSION_ALLOW_REMEMBER: false } }, changed.token);
+  const off = h.ok('auth.login', { username: 'admin', password: 'NewPass2569x', remember: true });
+  assert.equal(off.remember, false);
+  h.setNow('2026-11-22T03:00:00+07:00');
+  assert.equal(h.api('auth.me', {}, off.token).error.code, 'UNAUTHENTICATED');
+  h.newExecution();
+  assert.equal(h.gas.bootConfig_().allowRemember, false, 'หน้าเข้าสู่ระบบซ่อนตัวเลือกนี้');
+});

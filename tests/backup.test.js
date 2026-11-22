@@ -5,7 +5,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { setupFinance } = require('./finance-helpers');
-const { plain } = require('./harness');
+const { plain, createEnv } = require('./harness');
 
 function ready() {
   const t = setupFinance();
@@ -119,14 +119,14 @@ test('Google Drive ยังไม่ได้รับอนุญาต: แ�
   h.env.driveFailure = 'Exception: You do not have permission to call DriveApp.createFolder. Required permissions: https://www.googleapis.com/auth/drive';
   const res = h.api('backups.create', {}, t.admin);
   assert.equal(res.ok, false);
-  assert.match(res.error.message, /ยังไม่ได้รับอนุญาตให้ใช้ Google Drive/);
+  assert.match(res.error.message, /ยังไม่ได้อนุญาตสิทธิ์ "Google ไดรฟ์/);
   assert.doesNotMatch(res.error.message, /googleapis|Exception/);
   h.newExecution();
   assert.throws(() => h.gas.dailyBackup({ triggerUid: triggerUid(h) }));
   h.env.driveFailure = null;
   const status = h.ok('backups.status', {}, t.admin);
   assert.equal(status.lastAuto.ok, false);
-  assert.match(status.lastAuto.message, /Google Drive/);
+  assert.match(status.lastAuto.message, /Google ไดรฟ์/);
   assert.equal(h.auditRows().filter((r) => r.Action === 'BACKUP').length, 0);
 });
 
@@ -219,4 +219,36 @@ test('กู้คืนไม่ได้จากไฟล์นอกโฟ�
   h.gas.DriveApp.getFileById(backup.fileId).setTrashed(true);
   assert.equal(h.api('backups.restorePreview', { fileId: backup.fileId }, t.admin).error.code, 'FORBIDDEN');
   assert.equal(h.ok('backups.list', {}, t.admin).backups.length, 1, 'เหลือเฉพาะไฟล์ที่ไม่อยู่ในถังขยะ');
+});
+
+test('ติดตั้งโดยยังไม่ได้ติ๊กสิทธิ์ทำงานอัตโนมัติ: รายงานบอกวิธีแก้ และรันติดตั้งซ้ำหลังอนุญาตแล้วตั้งเวลาให้', () => {
+  const h = createEnv();
+  h.env.scriptAppFailure = 'Exception: คุณไม่ได้รับอนุญาตให้เรียกใช้ ScriptApp.getProjectTriggers สิทธิ์ที่จำเป็นคือ https://www.googleapis.com/auth/script.scriptapp';
+  const first = plain(h.gas.SetupDatabase());
+  assert.deepEqual(first.permissionsMissing, ['การทำงานเมื่อไม่ได้เปิดใช้ (ใช้ตั้งเวลาสำรองข้อมูลอัตโนมัติ)']);
+  assert.equal(first.backupScheduleCreated, null);
+  const log = h.env.logs.map((l) => l.text).join('\n');
+  assert.match(log, /คำเตือน: ยังไม่ได้รับอนุญาตสิทธิ์: การทำงานเมื่อไม่ได้เปิดใช้/);
+  assert.match(log, /ติ๊ก "เลือกทั้งหมด \(Select all\)"/);
+  assert.equal(h.env.props.has('BACKUP_SCHEDULE'), false, 'ยังไม่บันทึกว่าตั้งค่าแล้ว');
+  assert.equal(h.env.triggers.length, 0);
+
+  // เจ้าของระบบอนุญาตครบแล้ว รันติดตั้งอีกครั้ง
+  h.env.scriptAppFailure = null;
+  h.newExecution();
+  const second = plain(h.gas.SetupDatabase());
+  assert.deepEqual(second.permissionsMissing, []);
+  assert.equal(second.backupScheduleCreated, 18);
+  assert.equal(h.env.triggers.length, 1);
+});
+
+test('หน้าเว็บ: ตั้งเวลาไม่ได้เพราะยังไม่ได้รับสิทธิ์ แจ้งชื่อสิทธิ์ที่ขาดและวิธีแก้ ไม่แสดงข้อความดิบของ Google', () => {
+  const { t, h } = ready();
+  h.env.scriptAppFailure = 'Exception: You do not have permission to call ScriptApp.getProjectTriggers. Required permissions: https://www.googleapis.com/auth/script.scriptapp';
+  const res = h.api('backups.setSchedule', { enabled: true, hour: 18 }, t.admin);
+  assert.equal(res.ok, false);
+  assert.equal(res.error.reason, 'PERMISSION_MISSING');
+  assert.match(res.error.message, /การทำงานเมื่อไม่ได้เปิดใช้/);
+  assert.match(res.error.message, /เลือกทั้งหมด/);
+  assert.doesNotMatch(res.error.message, /googleapis|Exception/);
 });

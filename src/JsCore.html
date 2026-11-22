@@ -161,23 +161,45 @@
   };
 
   // ---------------------------------------------------------------------------
-  // เก็บ token เฉพาะในแท็บนี้ (ปิดแท็บแล้วหาย)
+  // เก็บ token: ปกติเก็บเฉพาะในแท็บนี้ (ปิดแท็บแล้วหาย)
+  // ถ้าผู้ใช้เลือก "อยู่ในระบบต่อในเครื่องนี้" เก็บในเครื่อง (ปิดเบราว์เซอร์แล้วยังอยู่ จนครบเวลาที่ Server กำหนด)
+  // ชื่อผู้ใช้ที่ให้จดจำ เก็บแยก (ไม่เก็บรหัสผ่านเด็ดขาด)
   // ---------------------------------------------------------------------------
   var TOKEN_KEY = 'wsh-fee-session';
+  var USERNAME_KEY = 'wsh-fee-username';
+  function store(kind) {
+    try { return kind === 'local' ? window.localStorage : window.sessionStorage; } catch (e) { return null; }
+  }
+  function storeGet(kind, key) { try { var s = store(kind); return s ? s.getItem(key) : null; } catch (e) { return null; } }
+  function storeSet(kind, key, value) { try { var s = store(kind); if (s) s.setItem(key, value); } catch (e) { /* ใช้ในหน่วยความจำแทน */ } }
+  function storeRemove(kind, key) { try { var s = store(kind); if (s) s.removeItem(key); } catch (e) { /* ไม่มี storage */ } }
+
   App.session = {
     get: function () {
       if (App.state.token) return App.state.token;
-      try { App.state.token = window.sessionStorage.getItem(TOKEN_KEY); } catch (e) { App.state.token = null; }
+      var t = storeGet('session', TOKEN_KEY);
+      if (t) { App.state.remember = false; } else { t = storeGet('local', TOKEN_KEY); App.state.remember = !!t; }
+      App.state.token = t || null;
       return App.state.token;
     },
-    set: function (token) {
+    /** remember: true = เก็บในเครื่อง / false = เฉพาะแท็บนี้ / ไม่ระบุ = ใช้แบบเดิม (เช่น ตอนเปลี่ยนรหัสผ่าน) */
+    set: function (token, remember) {
+      if (remember !== undefined) App.state.remember = !!remember;
       App.state.token = token;
-      try { window.sessionStorage.setItem(TOKEN_KEY, token); } catch (e) { /* ใช้ในหน่วยความจำแทน */ }
+      storeRemove(App.state.remember ? 'session' : 'local', TOKEN_KEY);
+      storeSet(App.state.remember ? 'local' : 'session', TOKEN_KEY, token);
     },
     clear: function () {
       App.state.token = null;
       App.state.me = null;
-      try { window.sessionStorage.removeItem(TOKEN_KEY); } catch (e) { /* ไม่มี storage */ }
+      App.state.remember = false;
+      storeRemove('session', TOKEN_KEY);
+      storeRemove('local', TOKEN_KEY);
+    },
+    rememberedUsername: function () { return storeGet('local', USERNAME_KEY) || ''; },
+    rememberUsername: function (username, keep) {
+      if (keep && username) storeSet('local', USERNAME_KEY, username);
+      else storeRemove('local', USERNAME_KEY);
     },
   };
 

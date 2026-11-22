@@ -203,6 +203,10 @@ async function main() {
     await p.locator('.userbox').getByRole('button', { name: 'ออกจากระบบ' }).click();
     await p.getByText('ออกจากระบบเรียบร้อยแล้ว').waitFor();
     check(true, 'ออกจากระบบแล้วกลับหน้าเข้าสู่ระบบ');
+    check(await p.getByLabel('ชื่อผู้ใช้', { exact: true }).inputValue() === 'admin' &&
+      await p.getByLabel('จดจำชื่อผู้ใช้ในเครื่องนี้').isChecked() &&
+      !(await p.getByLabel(/อยู่ในระบบต่อในเครื่องนี้/).isChecked()),
+      'หน้าเข้าสู่ระบบจำชื่อผู้ใช้ล่าสุดไว้ (ไม่จำรหัสผ่าน) และ "อยู่ในระบบต่อ" ไม่ถูกเลือกไว้ก่อน');
 
     // ------------------------------------------------------------------ คอมพิวเตอร์: เจ้าหน้าที่การเงิน
     await login(p, 'finance1', 'TempPass123');

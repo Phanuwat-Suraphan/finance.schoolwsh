@@ -49,7 +49,7 @@ test('BOOT ไม่มีข้อมูลลับ และข้อคว�
   const html = h.gas.doGet({}).getContent();
   const boot = /var BOOT = (\{.*?\});/.exec(html)[1];
   const data = JSON.parse(boot);
-  assert.deepEqual(Object.keys(data).sort(), ['appName', 'authMode', 'province', 'release', 'schoolName', 'version']);
+  assert.deepEqual(Object.keys(data).sort(), ['allowRemember', 'appName', 'authMode', 'province', 'release', 'schoolName', 'version']);
   assert.equal(data.schoolName, '</script><script>alert(1)</script>', 'ค่าถูกต้องหลังแปลง JSON');
   assert.ok(!html.includes('</script><script>alert(1)'), 'ต้อง escape เครื่องหมาย < ในสคริปต์');
   ['PASSWORD_PEPPER', 'DB_SPREADSHEET_ID'].forEach((k) => assert.ok(!html.includes(h.env.props.get(k)), k));

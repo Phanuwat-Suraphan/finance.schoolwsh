@@ -34,9 +34,11 @@ function renderAppHtml_() {
 function bootConfig_() {
   let schoolName = APP.SCHOOL_NAME;
   let province = APP.PROVINCE;
+  let allowRemember = true;
   try {
     schoolName = getSetting_('SCHOOL_NAME') || schoolName;
     province = getSetting_('SCHOOL_PROVINCE') || province;
+    allowRemember = getSetting_('SESSION_ALLOW_REMEMBER') === true;
   } catch (e) {
     // ยังไม่ได้ติดตั้งฐานข้อมูล: ใช้ค่าเริ่มต้น
   }
@@ -47,6 +49,7 @@ function bootConfig_() {
     version: APP.VERSION,
     release: APP.RELEASE,
     authMode: authMode_(),
+    allowRemember: allowRemember,
   };
 }
 

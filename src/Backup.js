@@ -65,16 +65,52 @@ function safeParseJson_(text, fallback) {
   }
 }
 
-/** แปลงข้อผิดพลาดจาก Drive/ScriptApp เป็นข้อความภาษาไทย (รายละเอียดเขียนลง Log โดยไม่มีค่าลับ) */
+const PERMISSION_FIX_HINT = 'วิธีแก้: เจ้าของระบบเปิด Apps Script กด Run ฟังก์ชัน SetupDatabase อีกครั้ง ' +
+  'ในหน้าขออนุญาตของ Google ให้ติ๊ก "เลือกทั้งหมด (Select all)" ก่อนกดดำเนินการต่อ แล้ว Deploy เวอร์ชันใหม่ (คู่มือติดตั้ง หัวข้อปัญหาที่พบบ่อย)';
+
+/** ข้อผิดพลาดเพราะเจ้าของระบบยังไม่ได้อนุญาตสิทธิ์ (เช่น ไม่ได้ติ๊กสิทธิ์บางข้อในหน้าขออนุญาตแบบเลือกได้ของ Google) */
+function isPermissionError_(e) {
+  const text = e && e.message ? String(e.message) : String(e);
+  return /permission|authorization|ได้รับอนุญาต|สิทธิ์ที่จำเป็น|Required permissions/i.test(text);
+}
+
+/** สิทธิ์ที่ขาดจากข้อความของ Google (ไม่แสดงข้อความดิบในหน้าเว็บ) */
+function missingPermissionLabel_(e) {
+  const text = e && e.message ? String(e.message) : String(e);
+  if (/script\.scriptapp|ScriptApp/.test(text)) return 'การทำงานเมื่อไม่ได้เปิดใช้ (ใช้ตั้งเวลาสำรองข้อมูลอัตโนมัติ)';
+  if (/auth\/drive|DriveApp/.test(text)) return 'Google ไดรฟ์ (ใช้สร้างไฟล์สำรองข้อมูล)';
+  if (/spreadsheets|SpreadsheetApp/.test(text)) return 'Google ชีต (ใช้สร้างไฟล์สำรองข้อมูล)';
+  return 'สิทธิ์ที่ระบบต้องใช้';
+}
+
+/** แปลงข้อผิดพลาดจาก Drive/ScriptApp เป็นข้อความภาษาไทย (รายละเอียดเขียนลง Log ของเจ้าของระบบ ไม่มีค่าลับ) */
 function driveError_(e, what) {
   if (isAppError_(e)) return e;
   const text = e && e.message ? String(e.message) : String(e);
   console.error(what + ' ไม่สำเร็จ: ' + text.slice(0, 300));
-  if (/permission|authorization|สิทธิ์|Required permissions/i.test(text)) {
-    return appError_(ERROR_CODES.INTERNAL, what + 'ไม่สำเร็จ เพราะระบบยังไม่ได้รับอนุญาตให้ใช้ Google Drive ' +
-      'กรุณาให้เจ้าของระบบเปิด Apps Script แล้วกด Run ฟังก์ชัน SetupDatabase อีกครั้งเพื่อกดอนุญาตสิทธิ์ (ดูคู่มือติดตั้ง หัวข้อระยะที่ 7)');
+  if (isPermissionError_(e)) {
+    return appError_(ERROR_CODES.INTERNAL, what + 'ไม่สำเร็จ เพราะเจ้าของระบบยังไม่ได้อนุญาตสิทธิ์ "' + missingPermissionLabel_(e) + '" ' +
+      PERMISSION_FIX_HINT, { reason: 'PERMISSION_MISSING' });
   }
   return appError_(ERROR_CODES.INTERNAL, what + 'ไม่สำเร็จ (ติดต่อ Google Drive ไม่ได้ชั่วคราว) กรุณาลองใหม่อีกครั้ง');
+}
+
+/**
+ * ตอนติดตั้ง: ตรวจว่าได้รับสิทธิ์ที่การสำรองข้อมูลต้องใช้ครบหรือไม่ (Google ให้ผู้ใช้เลือกอนุญาตทีละข้อได้)
+ * คืนรายชื่อสิทธิ์ที่ขาด และเพิ่มคำเตือนพร้อมวิธีแก้ในรายงานการติดตั้ง
+ */
+function checkBackupPermissions_(report) {
+  const missing = [];
+  const probe = function (fn) {
+    try { fn(); } catch (e) { if (isPermissionError_(e)) missing.push(missingPermissionLabel_(e)); }
+  };
+  probe(function () { DriveApp.getRootFolder().getId(); });
+  probe(function () { ScriptApp.getProjectTriggers(); });
+  if (missing.length) {
+    report.warnings.push('ยังไม่ได้รับอนุญาตสิทธิ์: ' + missing.join(', ') + ' ระบบจึงยังสำรองข้อมูลอัตโนมัติไม่ได้ ' + PERMISSION_FIX_HINT);
+  }
+  report.permissionsMissing = missing;
+  return missing;
 }
 
 // ---------------------------------------------------------------------------
@@ -323,14 +359,19 @@ function applyBackupSchedule_(enabled, hour, actor) {
   return backupScheduleStatus_();
 }
 
-/** ตอนติดตั้ง: เปิดการสำรองอัตโนมัติทุกวันให้ ถ้ายังไม่เคยตั้งค่า (ถ้าผู้ดูแลระบบปิดไว้ จะไม่เปิดให้อีก) */
+/**
+ * ตอนติดตั้ง: เปิดการสำรองอัตโนมัติทุกวันให้ ถ้ายังไม่เคยตั้งค่า (ถ้าผู้ดูแลระบบปิดไว้ จะไม่เปิดให้อีก)
+ * ถ้ายังไม่ได้รับสิทธิ์ จะยังไม่บันทึกว่า "ตั้งค่าแล้ว" เพื่อให้รัน SetupDatabase ซ้ำหลังอนุญาตแล้วตั้งให้ได้
+ */
 function ensureDefaultBackupSchedule_(report) {
+  const missing = checkBackupPermissions_(report);
   if (PropertiesService.getScriptProperties().getProperty(PROP_KEYS.BACKUP_SCHEDULE)) return;
+  if (missing.length) return;
   try {
     applyBackupSchedule_(true, BACKUP_DEFAULT_HOUR, ACTORS.OWNER);
     report.backupScheduleCreated = BACKUP_DEFAULT_HOUR;
   } catch (e) {
-    report.warnings.push('ตั้งเวลาสำรองข้อมูลอัตโนมัติไม่สำเร็จ ผู้ดูแลระบบตั้งได้ภายหลังในหน้า "สำรองข้อมูล"');
+    report.warnings.push('ตั้งเวลาสำรองข้อมูลอัตโนมัติไม่สำเร็จ ' + (isPermissionError_(e) ? PERMISSION_FIX_HINT : 'ผู้ดูแลระบบตั้งได้ภายหลังในหน้า "สำรองและกู้คืนข้อมูล"'));
   }
 }
 

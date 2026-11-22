@@ -563,6 +563,7 @@ function createEnv(options) {
     driveRootId: 'ROOT',
     triggers: [],
     driveFailure: null, // ตั้งเป็นข้อความเพื่อจำลอง Drive ล้มเหลว
+    scriptAppFailure: null, // ตั้งเป็นข้อความเพื่อจำลอง ScriptApp ยังไม่ได้รับสิทธิ์
   };
 
   const nowMs = () => (env.fixedNow ? env.fixedNow.getTime() : Date.now());
@@ -655,7 +656,12 @@ function createEnv(options) {
         return target[prop];
       },
     }),
-    ScriptApp: createScriptApp(env),
+    ScriptApp: new Proxy(createScriptApp(env), {
+      get(target, prop) {
+        if (env.scriptAppFailure && typeof target[prop] === 'function') return () => { throw new Error(env.scriptAppFailure); };
+        return target[prop];
+      },
+    }),
     MimeType: { GOOGLE_SHEETS: MIME_SHEETS, FOLDER: MIME_FOLDER },
     LockService: { getScriptLock: () => lock },
     CacheService: { getScriptCache: () => scriptCache },

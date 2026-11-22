@@ -182,6 +182,7 @@ function setupDatabase_(ss) {
     settingsAdded: [],
     academicYearCreated: null,
     backupScheduleCreated: null,
+    permissionsMissing: [],
     changed: false,
   };
 
