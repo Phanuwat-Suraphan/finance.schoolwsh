@@ -288,7 +288,8 @@ textarea.input { min-height: 84px; resize: vertical; }
   .data-table .actions::before { content: none; }
   .table-wrap { overflow: visible; }
   .card-body { padding: 14px; }
-  .modal-overlay { padding: 0; align-items: stretch; }
+  /* หน้าต่างเต็มจอ และยาวตามเนื้อหา (ถ้าใช้ stretch เนื้อหาที่ยาวเกินจอจะล้นพื้นหลังสีขาว) */
+  .modal-overlay { padding: 0; align-items: flex-start; }
   .modal { border-radius: 0; min-height: 100vh; max-width: none; }
   .modal-foot { border-radius: 0; position: sticky; bottom: 0; }
   .toast-root { left: 16px; right: 16px; bottom: 16px; max-width: none; }
