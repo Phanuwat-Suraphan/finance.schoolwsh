@@ -172,7 +172,7 @@ test('คำตอบทุกคำสั่งส่งผ่าน google.scr
   const reg = call('receipts.registerBook', { bookNo: '1', startNo: 1, endNo: 10 }, tokens.FINANCE).data;
   call('receipts.activateBook', { bookId: reg.bookId }, tokens.FINANCE);
   const pctx = call('payments.context', { studentId: st.studentId }, tokens.FINANCE).data;
-  call('payments.create', {
+  const createdPay = call('payments.create', {
     requestKey: 'serialization-test-0001', studentId: st.studentId, paymentDate: '2026-11-21', amount: '100', channel: 'เงินสด',
     receivedByName: 'ทดสอบ', bookId: pctx.book.bookId, receiptNo: 1, confirmPhysicalReceipt: true,
     allocations: [{ assessmentId: pctx.items[0].assessmentId, amount: '100' }],
@@ -185,6 +185,15 @@ test('คำตอบทุกคำสั่งส่งผ่าน google.scr
   call('approvals.list', { status: 'ALL' }, tokens.DIRECTOR);
   call('receipts.books', {}, tokens.DIRECTOR);
   call('payments.list', {}, tokens.DIRECTOR);
+  call('receipts.book', { bookId: reg.bookId }, tokens.DIRECTOR);
+  const paidId = createdPay.data.payment.paymentId;
+  call('payments.get', { paymentId: paidId }, tokens.DIRECTOR);
+  call('payments.requestCorrection', {
+    paymentId: paidId, paymentDate: '2026-11-21', amount: '120', channel: 'เงินสด', receivedByName: 'ทดสอบ', reason: 'พิมพ์ผิด',
+    allocations: [{ assessmentId: pctx.items[0].assessmentId, amount: '120' }],
+  }, tokens.FINANCE);
+  call('receipts.requestCancelNumber', { bookId: reg.bookId, receiptNo: 2, reason: 'เขียนผิด', confirmKept: true }, tokens.FINANCE);
+  call('approvals.list', { status: 'ALL' }, tokens.DIRECTOR);
   const walk = (v, path) => {
     const tag = Object.prototype.toString.call(v);
     assert.notEqual(tag, '[object Date]', 'พบ Date ที่ ' + path);
