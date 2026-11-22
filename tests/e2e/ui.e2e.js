@@ -329,13 +329,13 @@ async function main() {
     await modal.getByLabel('เอกสารที่อนุมัติอัตรา').fill('มติคณะกรรมการสถานศึกษา ครั้งที่ 1/2570 ลงวันที่ 1 พ.ค. 2570');
     await modal.getByRole('button', { name: 'ตั้งอัตรา' }).click();
     await toast(p, 'ตั้งอัตราแล้ว 2 ชั้น');
-    await p.locator('.data-table tbody tr', { hasText: 'ป.2' }).getByRole('button', { name: 'สร้างรายการเรียกเก็บ' }).click();
+    await p.locator('.data-table tbody tr', { hasText: 'ป.2' }).getByRole('button', { name: 'เรียกเก็บ' }).click();
     await p.locator('.modal').getByText('จะสร้างรายการเรียกเก็บ 3 คน รวม 1,500.00 บาท').waitFor();
     check(true, 'ดูตัวอย่างก่อนสร้างรายการเรียกเก็บ: ป.2 จำนวน 3 คน รวม 1,500.00 บาท');
     await shot(p, '16-fee-generate');
     await p.locator('.modal').getByRole('button', { name: 'สร้างรายการเรียกเก็บ 3 คน' }).click();
     await toast(p, 'สร้างรายการเรียกเก็บ 3 คน รวม 1,500.00 บาท เรียบร้อยแล้ว');
-    await p.locator('.data-table tbody tr', { hasText: 'ป.3' }).getByRole('button', { name: 'สร้างรายการเรียกเก็บ' }).click();
+    await p.locator('.data-table tbody tr', { hasText: 'ป.3' }).getByRole('button', { name: 'เรียกเก็บ' }).click();
     await p.locator('.modal').getByRole('button', { name: 'สร้างรายการเรียกเก็บ 1 คน' }).click();
     await toast(p, 'สร้างรายการเรียกเก็บ 1 คน');
     await p.locator('.stat', { hasText: 'คงค้าง' }).getByText('2,000.00 บาท').waitFor();
@@ -393,7 +393,7 @@ async function main() {
     check(await p.locator('.data-table').getByText('ชำระครบ').isVisible(), 'จ่ายครบแล้วสถานะเป็นชำระครบ');
 
     await nav(p, 'อัตราและการเรียกเก็บ');
-    await p.locator('.data-table tbody tr td', { hasText: /^ป\.2$/ }).click();
+    await p.locator('.data-table tbody tr td .strong', { hasText: /^ป\.2$/ }).click();
     await p.getByRole('heading', { name: 'เงินบำรุงการศึกษา ภาคเรียนที่ 1/2570 ชั้น ป.2' }).waitFor();
     await p.locator('.data-table tbody tr', { hasText: '10001' }).getByRole('button', { name: 'ลดหย่อน/ยกเว้น' }).click();
     await modal.getByLabel(/^จำนวนเงินที่ลดหย่อน/).fill('100');
@@ -406,7 +406,7 @@ async function main() {
     await shot(p, '21-fee-detail');
 
     await p.getByRole('button', { name: 'กลับ' }).click();
-    await p.locator('.data-table tbody tr td', { hasText: /^ป\.3$/ }).click();
+    await p.locator('.data-table tbody tr td .strong', { hasText: /^ป\.3$/ }).click();
     await p.locator('.data-table tbody tr', { hasText: '30001' }).click();
     await p.getByRole('heading', { name: 'เด็กชายกล้า หาญ' }).waitFor();
     await p.getByRole('button', { name: 'ลดหย่อน/ยกเว้น' }).click();
@@ -477,7 +477,7 @@ async function main() {
     check(forgedPay === 'FORBIDDEN', 'ผู้อำนวยการเรียกคำสั่งบันทึกรับเงินโดยตรง ถูก Server ปฏิเสธ');
     await m.getByRole('button', { name: 'เปิดเมนู' }).click();
     await m.locator('.nav-item', { hasText: 'อัตราและการเรียกเก็บ' }).click();
-    await m.locator('.data-table tbody tr td', { hasText: /^ป\.2$/ }).click();
+    await m.locator('.data-table tbody tr td .strong', { hasText: /^ป\.2$/ }).click();
     await m.locator('.data-table tbody tr', { hasText: '10001' }).getByText('400.00').first().waitFor();
     check(true, 'หลังอนุมัติ ยอดสุทธิของนักเรียนลดเหลือ 400.00 บาท');
     check(await noHorizontalScroll(m), 'มือถือ: รายการเรียกเก็บไม่มีแถบเลื่อนแนวนอน');

@@ -470,6 +470,11 @@
       }
       opts.columns.forEach(function (c) {
         var content = c.render ? c.render(row) : row[c.key];
+        // หลายบรรทัดในช่องเดียว: รวมเป็นก้อนเดียว (บนมือถือจะไม่ถูกแยกเป็นหลายคอลัมน์)
+        if (Array.isArray(content) && !/\bactions\b/.test(c.className || '')) {
+          content = content.filter(function (x) { return x !== null && x !== undefined && x !== false && x !== ''; });
+          content = content.length ? h('div', { class: 'cell-stack' }, content) : '';
+        }
         var td = h('td', { class: c.className, 'data-label': c.label });
         append(td, content === null || content === undefined || content === '' ? '–' : content);
         tr.appendChild(td);

@@ -14,6 +14,7 @@
   App.state.feeYear = null;
 
   function isFinance() { return App.state.me.user.role === 'FINANCE'; }
+  function withTitle(el, title) { el.title = title; return el; }
   function isDirector() { return App.state.me.user.role === 'DIRECTOR'; }
 
   function num(satang, strongWhenPositive) {
@@ -230,22 +231,23 @@
         });
 
         var columns = [
-          { label: 'ภาคเรียน', key: 'termLabel', className: 'nowrap' },
-          { label: 'ชั้น', key: 'gradeLevel', className: 'nowrap' },
+          { label: 'ชั้น / ภาคเรียน', className: 'nowrap', render: function (f) {
+            return [h('div', { class: 'strong', text: f.gradeLevel }), h('div', { class: 'muted small', text: f.termLabel }),
+              f.status !== 'ACTIVE' ? App.badge(f.statusLabel, App.KIND.ACTIVE[f.status]) : null];
+          } },
           { label: 'อัตรา/คน', className: 'num', render: function (f) { return formatSatang_(f.amountSatang); } },
           { label: 'ครบกำหนด', className: 'nowrap', render: function (f) { return App.fmt.date(f.dueDate); } },
           { label: 'เอกสารอนุมัติอัตรา', render: function (f) {
-            return f.approvalRef ? h('span', { class: 'small', text: f.approvalRef }) : App.badge('ยังไม่กรอก', 'danger');
+            return f.approvalRef ? h('div', { class: 'small clamp-2', title: f.approvalRef, text: f.approvalRef }) : App.badge('ยังไม่กรอก', 'danger');
           } },
           { label: 'เรียกเก็บ', className: 'num', render: function (f) { return f.stats.count + ' คน'; } },
           { label: 'ชำระแล้ว', className: 'num', render: function (f) { return formatSatang_(f.stats.paidSatang); } },
           { label: 'คงค้าง', className: 'num', render: function (f) { return num(f.stats.outstandingSatang, true); } },
-          { label: 'สถานะ', render: function (f) { return App.badge(f.statusLabel, App.KIND.ACTIVE[f.status]); } },
         ];
         if (canEdit) {
           columns.push({ label: 'จัดการ', className: 'actions', render: function (f) {
             return [
-              f.status === 'ACTIVE' ? button('สร้างรายการเรียกเก็บ', 'primary btn-sm', function () { openGenerate(f); }, 'play') : null,
+              f.status === 'ACTIVE' ? withTitle(button('เรียกเก็บ', 'primary btn-sm', function () { openGenerate(f); }, 'play'), 'สร้างรายการเรียกเก็บของอัตรานี้ (ดูตัวอย่างก่อนบันทึก)') : null,
               button('แก้ไข', 'secondary btn-sm', function () { openFeeForm(data, f); }, 'edit'),
             ];
           } });

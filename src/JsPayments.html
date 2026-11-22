@@ -168,6 +168,7 @@
     var errorBox = h('div', { class: 'alert alert-error hidden', role: 'alert' });
     var confirmBox = h('input', { type: 'checkbox', id: 'confirm-receipt' });
     var confirmLabel = h('label', { class: 'confirm-box', for: 'confirm-receipt' }, confirmBox, h('span', { text: ctx.confirmText }));
+    confirmBox.addEventListener('change', function () { if (confirmBox.checked) errorBox.classList.add('hidden'); });
     var saveLabel = h('span', { text: 'บันทึกการรับเงิน' });
     var saveBtn = h('button', { type: 'button', class: 'btn' }, App.icon('check'), saveLabel);
     saveBtn.addEventListener('click', function () { save(false); });
