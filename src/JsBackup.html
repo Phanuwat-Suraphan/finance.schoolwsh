@@ -1,0 +1,182 @@
+<script>
+/* ==========================================================================
+   JsBackup — สำรองและกู้คืนข้อมูล (ระยะที่ 7, ข้อกำหนดข้อ 12) เฉพาะผู้ดูแลระบบ
+   - ผู้ดูแลระบบเห็นเฉพาะชื่อไฟล์ เวลา และจำนวนแถว ไม่เห็นรายละเอียดการเงิน
+   - กู้คืน: ระบบตรวจไฟล์และแสดงผลกระทบก่อน ต้องพิมพ์คำยืนยัน และสำรองข้อมูลปัจจุบันเป็นไฟล์ "ก่อนกู้คืน" ทุกครั้ง
+   - Server ตรวจสิทธิ์ ตรวจไฟล์ และทำทั้งหมดภายใต้ lock เดียว (หน้าเว็บนี้แค่แสดงผลและส่งคำสั่ง)
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var button = App.button;
+
+  var KIND_BADGE = { MANUAL: 'FINANCE', AUTO: 'muted', PRE_RESTORE: 'warning', OTHER: 'muted' };
+
+  function hourOptions() {
+    var out = [];
+    for (var i = 0; i < 24; i++) out.push({ value: String(i), label: (i < 10 ? '0' : '') + i + ':00–' + ((i + 1) % 24 < 10 ? '0' : '') + ((i + 1) % 24) + ':00 น.' });
+    return out;
+  }
+
+  function busyButton(btn, text) {
+    var label = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = text;
+    return function () { btn.disabled = false; btn.textContent = label; };
+  }
+
+  function backupNow(btn) {
+    App.confirm('สำรองข้อมูลทั้งหมดเป็นไฟล์ใหม่ในโฟลเดอร์สำรองของ Google Drive ระหว่างสำรอง (ประมาณ 1 นาที) ผู้อื่นจะบันทึกข้อมูลไม่ได้ชั่วคราว',
+      { title: 'สำรองข้อมูลตอนนี้', confirmLabel: 'สำรองข้อมูล' }).then(function (yes) {
+      if (!yes) return;
+      var done = busyButton(btn, 'กำลังสำรองข้อมูล…');
+      App.api('backups.create', {}).then(function (res) {
+        App.toast(res.message, 'success');
+        App.refresh();
+      }).catch(function (err) { done(); App.fail(err); });
+    });
+  }
+
+  function openSchedule(schedule) {
+    App.formModal({
+      title: 'ตั้งเวลาสำรองข้อมูลอัตโนมัติ',
+      intro: 'ระบบสำรองข้อมูลอัตโนมัติวันละครั้งในช่วงเวลาที่เลือก (Google เลือกนาทีเองภายในชั่วโมงนั้น) แนะนำช่วงหลังเลิกงาน เช่น 18:00–19:00 น. ' +
+        'ไฟล์อัตโนมัติเก็บตามจำนวนที่ตั้งไว้ในหน้าตั้งค่า (BACKUP_RETENTION) และเก็บไฟล์แรกของทุกเดือนถาวร',
+      fields: [
+        { key: 'enabled', type: 'checkbox', label: 'เปิดการสำรองข้อมูลอัตโนมัติทุกวัน', value: schedule.enabled, span2: true },
+        { key: 'hour', type: 'select', label: 'ช่วงเวลา', options: hourOptions(), value: String(schedule.enabled ? schedule.hour : 18), span2: true },
+      ],
+      onReady: function (f) {
+        var sync = function () { f.hour.input.disabled = !f.enabled.get(); };
+        f.enabled.input.addEventListener('change', sync);
+        sync();
+      },
+      onSubmit: function (v) { return App.api('backups.setSchedule', { enabled: v.enabled, hour: Number(v.hour) }); },
+      onDone: function (res) { App.toast(res.message, 'success'); App.refresh(); },
+    });
+  }
+
+  function openRestore(b, confirmText) {
+    var modal = App.modal({ title: 'กู้คืนข้อมูลจากไฟล์สำรอง', size: 'lg', body: h('p', { class: 'muted', text: 'กำลังตรวจไฟล์สำรอง…' }) });
+    App.api('backups.restorePreview', { fileId: b.fileId }).then(function (p) {
+      var body = modal.body;
+      clear(body);
+      body.appendChild(h('table', { class: 'kv' }, h('tbody', null,
+        h('tr', null, h('th', { text: 'ไฟล์' }), h('td', { class: 'strong', text: p.backup.name })),
+        h('tr', null, h('th', { text: 'ข้อมูล ณ' }), h('td', { text: App.fmt.datetime(p.backup.createdAt) })),
+        h('tr', null, h('th', { text: 'ประเภท' }), h('td', { text: p.backup.kindLabel + (p.backup.createdBy ? ' โดย ' + p.backup.createdBy : '') })))));
+      p.problems.forEach(function (x) { body.appendChild(h('div', { class: 'alert alert-error', text: x })); });
+      p.warnings.forEach(function (x) { body.appendChild(h('div', { class: 'alert alert-warning', text: x })); });
+      if (!p.valid) {
+        body.appendChild(h('p', { class: 'strong', text: 'ไฟล์นี้ใช้กู้คืนไม่ได้ ข้อมูลในระบบไม่ถูกเปลี่ยนแปลง' }));
+        return;
+      }
+      body.appendChild(h('h3', { style: { margin: '14px 0 6px' }, text: 'ผลกระทบของการกู้คืน' }));
+      body.appendChild(h('div', { class: 'alert alert-error' },
+        h('div', { class: 'strong', text: p.since.total
+          ? 'ข้อมูลที่บันทึกหลังเวลาสำรอง ' + p.since.total + ' รายการจะไม่อยู่ในระบบหลังกู้คืน'
+          : 'ไม่พบการบันทึกข้อมูลหลังเวลาสำรอง' }),
+        p.since.items.length ? h('div', { text: p.since.items.map(function (i) { return i.label + ' ' + i.count; }).join(' · ') }) : null,
+        h('div', { text: 'ถ้ามีการรับเงินหลังเวลาสำรอง เจ้าหน้าที่การเงินต้องบันทึกใหม่ตามสำเนาใบเสร็จ (รายการเดิมยังดูได้ในไฟล์ "ก่อนกู้คืน" และประวัติการใช้งาน)' })));
+      body.appendChild(App.table({
+        rows: p.sheets,
+        columns: [
+          { label: 'ข้อมูล', key: 'label' },
+          { label: 'ในไฟล์สำรอง', className: 'num', render: function (x) { return String(x.backupRows); } },
+          { label: 'ในระบบตอนนี้', className: 'num', render: function (x) { return String(x.currentRows); } },
+        ],
+      }));
+      body.appendChild(h('ul', { class: 'small', style: { margin: '10px 0' } },
+        h('li', { text: 'ระบบจะสำรองข้อมูลปัจจุบันเป็นไฟล์ "ก่อนกู้คืน" ก่อนเสมอ จึงย้อนการกู้คืนได้' }),
+        h('li', { text: 'ไม่กู้คืน: ' + p.excludedSheets.map(function (x) { return x.label; }).join(' และ ') + ' (บัญชีและรหัสผ่านปัจจุบันใช้ต่อได้ ประวัติการใช้งานไม่ย้อนกลับ)' }),
+        h('li', { text: 'หลังกู้คืน ทุกคนรวมถึงคุณต้องเข้าสู่ระบบใหม่' })));
+      var confirmField = App.field({ label: 'พิมพ์คำว่า "' + p.confirmText + '" เพื่อยืนยัน', autocomplete: 'off' });
+      var errorBox = h('div', { class: 'alert alert-error hidden', role: 'alert' });
+      body.appendChild(confirmField.wrap);
+      body.appendChild(errorBox);
+      var go = h('button', { type: 'button', class: 'btn btn-danger', text: 'กู้คืนข้อมูล', disabled: true });
+      confirmField.input.addEventListener('input', function () { go.disabled = confirmField.get().trim() !== p.confirmText; });
+      go.addEventListener('click', function () {
+        errorBox.classList.add('hidden');
+        var done = busyButton(go, 'กำลังกู้คืน… (อาจใช้เวลา 1–2 นาที)');
+        App.api('backups.restore', { fileId: b.fileId, confirmText: confirmField.get().trim() }).then(function (res) {
+          modal.close();
+          App.modal({
+            title: 'กู้คืนข้อมูลเรียบร้อย',
+            body: [h('div', { class: 'alert alert-success', text: res.message }),
+              h('p', { text: 'กรุณาแจ้งผู้ใช้ทุกคนให้เข้าสู่ระบบใหม่ และให้เจ้าหน้าที่การเงินตรวจรายการรับเงินหลังเวลา ' + App.fmt.datetime(res.backupCreatedAt) + ' กับสำเนาใบเสร็จ' })],
+            actions: [{ label: 'เข้าสู่ระบบใหม่' }],
+            onClose: function () { App.logout(); },
+          });
+        }).catch(function (err) {
+          done();
+          go.disabled = false;
+          errorBox.textContent = (err && err.message) || 'กู้คืนไม่สำเร็จ';
+          errorBox.classList.remove('hidden');
+        });
+      });
+      var cancel = h('button', { type: 'button', class: 'btn btn-secondary', text: 'ยกเลิก' });
+      cancel.addEventListener('click', function () { modal.close(); });
+      modal.foot.classList.remove('hidden');
+      modal.foot.appendChild(cancel);
+      modal.foot.appendChild(go);
+      confirmField.input.focus();
+    }).catch(function (err) {
+      clear(modal.body).appendChild(h('div', { class: 'alert alert-error', text: (err && err.message) || 'ตรวจไฟล์สำรองไม่สำเร็จ' }));
+    });
+  }
+
+  App.defineRoute('backups', {
+    title: 'สำรองและกู้คืนข้อมูล',
+    roles: ['ADMIN'],
+    menu: { group: 'manage', label: 'สำรองและกู้คืนข้อมูล', icon: 'database', order: 110 },
+    render: function () {
+      return App.api('backups.list', {}).then(function (d) {
+        var s = d.schedule;
+        var last = d.last;
+        var auto = d.lastAuto;
+        var alerts = [];
+        if (!s.enabled) alerts.push(h('div', { class: 'alert alert-warning', text: 'ยังไม่ได้เปิดการสำรองข้อมูลอัตโนมัติ แนะนำให้เปิดไว้ (ปุ่ม "ตั้งเวลาสำรองอัตโนมัติ")' }));
+        else if (!s.triggerFound) alerts.push(h('div', { class: 'alert alert-error', text: 'ไม่พบตัวตั้งเวลาสำรองอัตโนมัติใน Apps Script (อาจถูกลบ) กรุณากด "ตั้งเวลาสำรองอัตโนมัติ" แล้วบันทึกอีกครั้ง' }));
+        if (auto && !auto.ok) alerts.push(h('div', { class: 'alert alert-error', text: 'การสำรองอัตโนมัติครั้งล่าสุด (' + App.fmt.datetime(auto.at) + ') ไม่สำเร็จ: ' + (auto.message || '') }));
+        var backupBtn = button('สำรองข้อมูลตอนนี้', '', function () { backupNow(backupBtn); }, 'database');
+        var actions = [backupBtn, button('ตั้งเวลาสำรองอัตโนมัติ', 'secondary', function () { openSchedule(s); }, 'calendar')];
+        var table = App.table({
+          rows: d.backups,
+          columns: [
+            { label: 'ไฟล์สำรอง', render: function (b) { return [h('div', { class: 'strong', text: b.name }), h('div', { class: 'muted small', text: 'ข้อมูล ณ ' + App.fmt.datetime(b.createdAt) })]; } },
+            { label: 'ประเภท', render: function (b) { return App.badge(b.kindLabel, KIND_BADGE[b.kind]); } },
+            { label: 'ผู้สั่ง', render: function (b) { return b.createdBy || (b.kind === 'AUTO' ? 'ระบบ' : '–'); } },
+            { label: 'จำนวนแถว', className: 'num', render: function (b) { return b.rows === null ? '–' : String(b.rows); } },
+            { label: 'จัดการ', className: 'actions', render: function (b) { return button('กู้คืน…', 'ghost btn-sm', function () { openRestore(b, d.confirmText); }, 'refresh'); } },
+          ],
+          empty: 'ยังไม่มีไฟล์สำรอง กด "สำรองข้อมูลตอนนี้" เพื่อสร้างไฟล์แรก',
+        });
+        return h('div', null,
+          App.pageHead('สำรองและกู้คืนข้อมูล', 'ไฟล์สำรองเก็บใน Google Drive ของบัญชีเจ้าของระบบ (โฟลเดอร์ "' + (d.folder ? d.folder.name : 'สำรองข้อมูล ระบบเงินบำรุงการศึกษา') + '") ห้ามแชร์โฟลเดอร์นี้ให้ผู้อื่น', actions),
+          alerts.length ? h('div', { class: 'stack', style: { marginBottom: '14px' } }, alerts) : null,
+          h('div', { class: 'grid-cards' },
+            App.statCard('สำรองล่าสุด', last ? App.fmt.datetime(last.createdAt) : 'ยังไม่เคยสำรอง', last ? last.name : 'กดสำรองข้อมูลตอนนี้', last ? 'success' : 'danger'),
+            App.statCard('สำรองอัตโนมัติ', s.enabled ? 'ทุกวัน' : 'ปิดอยู่', s.enabled ? 'เวลาประมาณ ' + s.hourLabel : 'แนะนำให้เปิด', s.enabled && s.triggerFound ? 'success' : 'danger'),
+            App.statCard('ผลสำรองอัตโนมัติล่าสุด', auto ? (auto.ok ? 'สำเร็จ' : 'ไม่สำเร็จ') : 'ยังไม่มี', auto ? App.fmt.datetime(auto.at) : 'รอรอบเวลาที่ตั้งไว้', auto ? (auto.ok ? 'success' : 'danger') : ''),
+            App.statCard('ไฟล์ในโฟลเดอร์', d.backups.length + ' ไฟล์', 'เก็บไฟล์อัตโนมัติ ' + d.retention + ' ไฟล์ล่าสุด + ไฟล์แรกของทุกเดือน')),
+          h('div', { class: 'card', style: { marginTop: '14px' } },
+            h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'ไฟล์สำรอง (ล่าสุดก่อน)' }),
+              d.folder ? h('a', { class: 'btn btn-ghost btn-sm', href: d.folder.url, target: '_blank', rel: 'noopener', text: 'เปิดโฟลเดอร์ใน Google Drive' }) : null),
+            h('div', { class: 'card-body' },
+              h('p', { class: 'muted small', style: { marginTop: '0' }, text: 'ลิงก์โฟลเดอร์เปิดได้เฉพาะบัญชี Google ของเจ้าของระบบ · แนะนำให้ดาวน์โหลดไฟล์สำรองเก็บแยกไว้เดือนละครั้งตามนโยบายของโรงเรียน' }),
+              table)),
+          h('div', { class: 'card', style: { marginTop: '14px' } },
+            h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'ขั้นตอนกู้คืนข้อมูล' })),
+            h('div', { class: 'card-body' }, h('ol', { style: { margin: '0', paddingLeft: '20px', lineHeight: '1.8' } },
+              h('li', { text: 'แจ้งผู้ใช้ทุกคนให้หยุดบันทึกข้อมูลก่อน' }),
+              h('li', { text: 'เลือกไฟล์สำรองที่ต้องการ แล้วกด "กู้คืน…" ระบบจะตรวจไฟล์และแสดงผลกระทบ' }),
+              h('li', { text: 'พิมพ์คำว่า "' + d.confirmText + '" แล้วกดกู้คืน ระบบสำรองข้อมูลปัจจุบันเป็นไฟล์ "ก่อนกู้คืน" ให้อัตโนมัติ' }),
+              h('li', { text: 'เข้าสู่ระบบใหม่ แล้วให้เจ้าหน้าที่การเงินบันทึกรายการรับเงินที่เกิดหลังเวลาสำรองใหม่ตามสำเนาใบเสร็จ' }),
+              h('li', { text: 'ถ้ากู้คืนผิดไฟล์ ให้กู้คืนจากไฟล์ "ก่อนกู้คืน" ล่าสุดเพื่อย้อนกลับ' })))));
+      });
+    },
+  });
+})();
+</script>

@@ -1,0 +1,756 @@
+<script>
+/* ==========================================================================
+   JsReports — รายงานแบบทางการ พิมพ์และบันทึกเป็น PDF ได้ (ระยะที่ 7, ข้อกำหนดข้อ 11)
+   - ตัวเลขทุกตัวมาจาก Server (Reports.gs, Closings.gs, Arrears.gs, Receipts.gs) หน้านี้จัดรูปแบบเท่านั้น
+   - เอกสารแสดงเป็นแผ่น A4 บนจอ และพิมพ์เฉพาะเนื้อเอกสาร (ปุ่ม เมนู ตัวกรองไม่ถูกพิมพ์)
+   - บันทึกเป็น PDF: กดปุ่ม "พิมพ์ / บันทึก PDF" แล้วเลือกปลายทาง "บันทึกเป็น PDF" ในหน้าต่างพิมพ์ของเบราว์เซอร์
+   - ทุกเอกสารพิมพ์วันเวลาที่ออกรายงาน ผู้ออกรายงาน และช่องลงนาม
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var button = App.button;
+  var amt = function (s) { return formatSatang_(s); };
+  var thaiDate = function (iso) { return iso ? formatThaiDate_(iso) : '–'; };
+  var DOTS = '.........................................';
+
+  // ==========================================================================
+  // ส่วนประกอบของเอกสาร
+  // ==========================================================================
+  function docHead(meta, title, sub, extra) {
+    return h('div', { class: 'doc-head' },
+      h('div', { class: 'doc-school', text: meta.school.name }),
+      meta.school.affiliation ? h('div', { class: 'small', text: meta.school.affiliation }) : null,
+      h('div', { class: 'doc-title', text: title }),
+      sub ? h('div', { class: 'doc-sub', text: sub }) : null,
+      extra || null);
+  }
+
+  function docFoot(meta, left) {
+    return h('div', { class: 'doc-foot' },
+      h('span', { text: left || '' }),
+      h('span', { text: 'ออกรายงานเมื่อ ' + formatThaiDateTime_(meta.generatedAt) + ' โดย ' + meta.generatedBy }));
+  }
+
+  function signs(list) {
+    return h('div', { class: 'doc-signs' }, list.map(function (s) {
+      return h('div', { class: 'doc-sign' },
+        h('div', { text: 'ลงชื่อ ' + DOTS + ' ' + s[0] }),
+        h('div', { text: '(' + (s[1] || DOTS) + ')' }),
+        h('div', { text: 'ตำแหน่ง ' + (s[2] || '..............................') }),
+        h('div', { text: 'วันที่ ........ / ........ / ........' }));
+    }));
+  }
+
+  function preparerAndDirector(meta) {
+    var s = meta.signers;
+    return signs([['ผู้จัดทำ', s.financeName, s.financePosition], ['ผู้ตรวจสอบ', '', ''], ['ผู้อำนวยการ', s.directorName, s.directorPosition]]);
+  }
+
+  /**
+   * ตารางในเอกสาร (ไม่แปลงเป็นการ์ดบนมือถือ เลื่อนซ้ายขวาได้แทน)
+   * columns: [{ label, className, render(row, index) }] / rows: [{ ..., _class }] / foot: [{ className, cells: [{ text, colspan, className }] }]
+   */
+  function docTable(columns, rows, foot, emptyText) {
+    var thead = h('thead', null, h('tr', null, columns.map(function (c) { return h('th', { class: c.headClass || c.className, text: c.label }); })));
+    var tbody = h('tbody');
+    if (!rows.length) {
+      tbody.appendChild(h('tr', null, h('td', { class: 'center', colspan: String(columns.length), text: emptyText || 'ไม่มีรายการ' })));
+    }
+    rows.forEach(function (row, i) {
+      var tr = h('tr', { class: row._class || null });
+      columns.forEach(function (c) {
+        var v = c.render ? c.render(row, i) : row[c.key];
+        var td = h('td', { class: c.className || null });
+        if (v instanceof Node) td.appendChild(v);
+        else if (Array.isArray(v)) v.forEach(function (x) { if (x) td.appendChild(x instanceof Node ? x : document.createTextNode(String(x))); });
+        else td.textContent = v === null || v === undefined || v === '' ? '–' : String(v);
+        tr.appendChild(td);
+      });
+      tbody.appendChild(tr);
+    });
+    var tfoot = foot && foot.length ? h('tfoot', null, foot.map(function (f) {
+      return h('tr', { class: f.className || 'total' }, f.cells.map(function (c) {
+        return h('td', { class: c.className || null, colspan: c.colspan ? String(c.colspan) : null, text: c.text });
+      }));
+    })) : null;
+    return h('div', { class: 'doc-scroll' }, h('table', { class: 'doc-table' }, thead, tbody, tfoot));
+  }
+
+  function line(label, value) {
+    return h('div', null, h('span', { class: 'strong', text: label + ' ' }), h('span', { text: value }));
+  }
+
+  /** หน้าโครงรายงาน: หัวหน้า (ไม่พิมพ์) ตัวกรอง (ไม่พิมพ์) และเอกสาร */
+  function reportPage(title, desc, filters, body, extraActions) {
+    var actions = [button('กลับหน้ารายงาน', 'ghost', function () { App.go('reports'); }, 'arrowLeft')]
+      .concat(extraActions || [])
+      .concat([button('พิมพ์ / บันทึก PDF', '', function () { window.print(); }, 'printer')]);
+    return h('div', { class: 'has-print-head' },
+      App.pageHead(title, desc, actions),
+      filters && filters.length ? h('div', { class: 'toolbar filter-bar no-print' }, filters) : null,
+      body);
+  }
+
+  function showButton(onClick) {
+    var b = button('แสดงรายงาน', 'secondary', onClick, 'search');
+    return h('div', { class: 'field', style: { flex: '0 0 auto', minWidth: '0', justifyContent: 'flex-end' } }, b);
+  }
+
+  function yearOptions(years) {
+    return years.map(function (y) { return { value: String(y.year), label: y.label + (y.isCurrent ? ' (ปัจจุบัน)' : '') }; });
+  }
+
+  // ---------------------------------------------------------------- ช่วงเวลา (D-18)
+  function periodFields(params, years, today) {
+    var p = params || {};
+    var fyNow = fiscalYearOfDate_(today);
+    var fyOptions = [];
+    for (var fy = fyNow; fy >= fyNow - 5; fy--) fyOptions.push({ value: String(fy), label: 'ปีงบประมาณ ' + fy });
+    var monthOptions = [];
+    var parts = today.split('-').map(Number);
+    for (var i = 0; i < 24; i++) {
+      var y = parts[0];
+      var m = parts[1] - i;
+      while (m < 1) { m += 12; y -= 1; }
+      var key = y + '-' + (m < 10 ? '0' : '') + m;
+      monthOptions.push({ value: key, label: formatThaiMonth_(key) });
+    }
+    var type = App.field({ label: 'ช่วงเวลา', type: 'select', value: p.periodType || 'academic', options: [
+      { value: 'academic', label: 'ปีการศึกษา' }, { value: 'fiscal', label: 'ปีงบประมาณ' },
+      { value: 'month', label: 'รายเดือน' }, { value: 'range', label: 'กำหนดวันที่เอง' }] });
+    var year = App.field({ label: 'ปีการศึกษา', type: 'select', options: yearOptions(years),
+      value: String(p.year || App.state.me.school.currentAcademicYear) });
+    var fiscal = App.field({ label: 'ปีงบประมาณ', type: 'select', options: fyOptions, value: String(p.fiscalYear || fyNow) });
+    var month = App.field({ label: 'เดือน', type: 'select', options: monthOptions, value: p.month || monthOptions[0].value });
+    var from = App.field({ label: 'ตั้งแต่วันที่', type: 'date', value: p.fromDate || today.slice(0, 8) + '01' });
+    var to = App.field({ label: 'ถึงวันที่', type: 'date', value: p.toDate || today });
+    function sync() {
+      var t = type.get();
+      year.wrap.classList.toggle('hidden', t !== 'academic');
+      fiscal.wrap.classList.toggle('hidden', t !== 'fiscal');
+      month.wrap.classList.toggle('hidden', t !== 'month');
+      from.wrap.classList.toggle('hidden', t !== 'range');
+      to.wrap.classList.toggle('hidden', t !== 'range');
+    }
+    type.input.addEventListener('change', sync);
+    sync();
+    return {
+      wraps: [type.wrap, year.wrap, fiscal.wrap, month.wrap, from.wrap, to.wrap],
+      get: function () {
+        var t = type.get();
+        var out = { periodType: t };
+        if (t === 'academic') out.year = Number(year.get());
+        if (t === 'fiscal') out.fiscalYear = Number(fiscal.get());
+        if (t === 'month') out.month = month.get();
+        if (t === 'range') { out.fromDate = from.get(); out.toDate = to.get(); }
+        return out;
+      },
+    };
+  }
+
+  function periodPayload(params) {
+    var p = params || {};
+    return { periodType: p.periodType, year: p.year, fiscalYear: p.fiscalYear, month: p.month, fromDate: p.fromDate, toDate: p.toDate };
+  }
+
+  // ==========================================================================
+  // หน้ารวมรายงาน
+  // ==========================================================================
+  var REPORTS = [
+    { route: 'report-daily', icon: 'cash', title: 'รายงานการรับเงินประจำวัน และปิดยอด', desc: 'เรียงตามเลขที่ใบเสร็จ ยอดแยกช่องทาง ช่องลงนาม และปิดยอดประจำวัน' },
+    { route: 'report-notices', icon: 'user', title: 'เอกสารแจ้งยอดเรียกเก็บเงิน', desc: 'หนังสือแจ้งผู้ปกครอง แยกคนละหน้า เลือกชั้นหรือห้องได้' },
+    { route: 'report-collections', params: { groupBy: 'room' }, icon: 'list', title: 'รายงานการรับเงินแยกตามห้อง', desc: 'เลือกปีการศึกษา ปีงบประมาณ รายเดือน หรือกำหนดวันที่เอง' },
+    { route: 'report-collections', params: { groupBy: 'grade' }, icon: 'list', title: 'รายงานการรับเงินแยกตามระดับชั้น', desc: 'ยอดรวมทุกกลุ่มเท่ากับเงินที่รับจริงในช่วงเวลา' },
+    { route: 'report-arrears', icon: 'alertCircle', title: 'รายงานยอดค้างชำระ', desc: 'สรุปรายชั้น/ห้อง และรายชื่อนักเรียนที่ค้างชำระ' },
+    { route: 'report-register', icon: 'book', title: 'รายงานทะเบียนคุมใบเสร็จ', desc: 'ทุกเลขที่ของเล่ม: ใช้แล้ว ยกเลิก และยังไม่ใช้' },
+    { route: 'report-cancelled', icon: 'x', title: 'รายงานใบเสร็จยกเลิก', desc: 'ยกเลิกใบเสร็จที่รับเงินแล้ว และเลขที่ที่เขียนผิดหรือชำรุด พร้อมผลการพิจารณา' },
+    { route: 'report-annual', icon: 'calendar', title: 'รายงานสรุปประจำปีการศึกษา', desc: 'การเรียกเก็บ ลดหย่อน/ยกเว้น การรับเงินรายเดือน และยอดค้าง' },
+    { route: 'report-receipt-usage', icon: 'book', title: 'รายงานการใช้ใบเสร็จประจำปีงบประมาณ', desc: 'ยกมา รับเข้า ใช้ ยกเลิก และคงเหลือของแต่ละเล่ม' },
+  ];
+
+  App.defineRoute('reports', {
+    title: 'รายงานและปิดยอด',
+    roles: ['FINANCE', 'DIRECTOR'],
+    menu: { group: 'finance', label: 'รายงานและปิดยอด', icon: 'printer', order: 60 },
+    render: function () {
+      return App.api('closings.list', {}).then(function (cl) {
+        var items = REPORTS.map(function (r) {
+          var b = h('button', { type: 'button', class: 'report-item' }, App.icon(r.icon),
+            h('span', null, h('span', { class: 'ri-title', text: r.title }), h('span', { class: 'ri-desc', text: r.desc })));
+          b.addEventListener('click', function () { App.go(r.route, r.params || {}); });
+          return b;
+        });
+        return h('div', null,
+          App.pageHead('รายงานและปิดยอด', 'เลือกรายงานที่ต้องการ ทุกรายงานพิมพ์หรือบันทึกเป็น PDF ได้ (ในหน้าต่างพิมพ์ เลือกปลายทาง "บันทึกเป็น PDF")'),
+          cl.unclosedCount ? h('div', { class: 'alert alert-warning', style: { marginBottom: '14px' } },
+            h('span', { text: 'มีวันที่รับเงินแล้วแต่ยังไม่ปิดยอด ' + cl.unclosedCount + ' วัน (30 วันล่าสุด) ' }),
+            button('ดูรายการ', 'ghost btn-sm', function () { App.go('report-daily'); })) : null,
+          h('div', { class: 'report-grid' }, items));
+      });
+    },
+  });
+
+  // ==========================================================================
+  // 2. รายงานการรับเงินประจำวัน + ปิดยอด
+  // ==========================================================================
+  function openCloseDay(r) {
+    var f = r.figures;
+    App.formModal({
+      title: 'ปิดยอดวันที่ ' + thaiDate(r.date),
+      submitLabel: 'ปิดยอด',
+      intro: h('div', null,
+        h('div', { class: 'doc-lines' },
+          line('ใบเสร็จที่มีผล', f.receiptCount + ' ฉบับ' + (f.receiptRange ? ' (' + f.receiptRange + ')' : '')),
+          line('ยอดรวม', App.fmt.money(f.totalSatang) + ' (' + f.totalText + ')'),
+          f.byChannel.length ? line('แยกตามช่องทาง', f.byChannel.map(function (c) { return c.channel + ' ' + App.fmt.money(c.satang); }).join(' · ')) : null,
+          line('รหัสตรวจสอบ', f.verifyCode)),
+        h('div', { class: 'alert alert-warning', text: 'ตรวจนับเงินและสำเนาใบเสร็จให้ตรงกับรายงานก่อนปิดยอด หลังปิดยอดจะบันทึกรับเงิน ขอยกเลิก หรือขอแก้ไขรายการของวันนี้ไม่ได้ ถ้าจำเป็นต้องให้ผู้อำนวยการเปิดยอดใหม่' })),
+      fields: [{ key: 'confirm', type: 'checkbox', label: r.confirmText, span2: true }],
+      onSubmit: function (v) {
+        return App.api('closings.close', { date: r.date, expectedDigest: f.digest, confirmChecked: v.confirm });
+      },
+      onDone: function (res) { App.toast(res.message, 'success'); App.refresh(); },
+    });
+  }
+
+  function openReopenDay(r) {
+    App.formModal({
+      title: 'เปิดยอดวันที่ ' + thaiDate(r.date) + ' ใหม่',
+      submitLabel: 'เปิดยอดใหม่',
+      submitKind: 'danger',
+      intro: 'ใช้เมื่อต้องแก้ไขรายการของวันที่ปิดยอดแล้ว เช่น ลืมบันทึกใบเสร็จ หรือต้องยกเลิกใบเสร็จ ประวัติการปิดยอดครั้งนี้ยังเก็บไว้ และเจ้าหน้าที่การเงินต้องปิดยอดใหม่หลังแก้ไข',
+      fields: [{ key: 'reason', type: 'textarea', label: 'เหตุผลการเปิดยอดใหม่', required: true, maxlength: 500, span2: true }],
+      onSubmit: function (v) { return App.api('closings.reopen', { date: r.date, reason: v.reason }); },
+      onDone: function (res) { App.toast(res.message, 'success'); App.refresh(); },
+    });
+  }
+
+  function dailyDoc(r) {
+    var f = r.figures;
+    var c = r.closing;
+    var draft = !c ? h('div', { class: 'doc-draft', text: 'ร่าง – ยังไม่ปิดยอด' }) : null;
+    var columns = [
+      { label: 'ที่', className: 'center', render: function (x, i) { return String(i + 1); } },
+      { label: 'เล่มที่/เลขที่', className: 'nowrap', render: function (x) { return x.bookNo + '/' + x.receiptNo; } },
+      { label: 'เลขประจำตัว', className: 'nowrap', render: function (x) { return x.studentNo; } },
+      { label: 'ชื่อ-สกุล', render: function (x) { return x.studentName; } },
+      { label: 'ชั้น', className: 'nowrap', render: function (x) { return x.classLabel; } },
+      { label: 'รายการ', render: function (x) {
+        if (x.status === 'VOIDED') return 'ยกเลิกใบเสร็จ: ' + (x.voidReason || '');
+        return x.items.join(', ') + (x.corrected ? ' (แก้ไขรายการแล้ว)' : '');
+      } },
+      { label: 'ช่องทาง', headClass: 'nowrap', render: function (x) { return x.channel + (x.channelRef ? ' ' + x.channelRef : ''); } },
+      { label: 'จำนวนเงิน (บาท)', className: 'num', render: function (x) { return h('span', { class: 'amt', text: amt(x.amountSatang) }); } },
+    ];
+    var rows = r.rows.map(function (x) { return Object.assign({ _class: x.status === 'VOIDED' ? 'void' : null }, x); });
+    var foot = [{ cells: [
+      { text: 'รวมใบเสร็จที่มีผล ' + f.receiptCount + ' ฉบับ' + (f.voidedCount ? ' (ยกเลิก ' + f.voidedCount + ' ฉบับ ไม่นับรวม)' : ''), colspan: 7 },
+      { text: amt(f.totalSatang), className: 'num' }] }];
+    var footLeft = c
+      ? 'ปิดยอดเมื่อ ' + formatThaiDateTime_(c.closedAt) + ' โดย ' + c.closedBy + ' · รหัสตรวจสอบ ' + c.verifyCode + ' · อ้างอิงประวัติ ' + c.auditAnchor
+      : 'ร่าง ยังไม่ปิดยอด · รหัสตรวจสอบ ณ ขณะพิมพ์ ' + f.verifyCode;
+    var s = r.meta.signers;
+    return h('div', { class: 'doc' },
+      docHead(r.meta, 'รายงานการรับเงินประจำวัน', 'วันที่ ' + thaiDate(r.date), draft),
+      docTable(columns, rows, foot, 'ไม่มีการรับเงินในวันนี้'),
+      h('div', { class: 'doc-lines' },
+        line('จำนวนเงินรวม (ตัวอักษร)', '(' + f.totalText + ')'),
+        f.byChannel.length ? line('แยกตามช่องทาง', f.byChannel.map(function (x) { return x.channel + ' ' + amt(x.satang) + ' บาท (' + x.count + ' ฉบับ)'; }).join(' · ')) : null,
+        f.receiptRange ? line('ใบเสร็จที่ใช้', f.receiptRange) : null,
+        r.spoiled.length ? line('เลขที่ที่ยกเลิกก่อนบันทึกรับเงิน (เขียนผิด/ชำรุด)', r.spoiled.map(function (x) {
+          return x.bookNo + '/' + x.receiptNo + ' (' + x.statusLabel + ')';
+        }).join(', ')) : null,
+        c && r.matches === false ? h('div', { class: 'text-danger strong', text: 'คำเตือน: รายการของวันนี้ไม่ตรงกับตอนปิดยอด (รหัสตรวจสอบปัจจุบัน ' + f.verifyCode + ') กรุณาตรวจสอบประวัติการใช้งาน' }) : null),
+      signs([['ผู้รับเงิน', s.financeName, s.financePosition], ['ผู้ตรวจสอบ', '', ''], ['ผู้อำนวยการ', s.directorName, s.directorPosition]]),
+      docFoot(r.meta, footLeft));
+  }
+
+  App.defineRoute('report-daily', {
+    title: 'รายงานการรับเงินประจำวัน',
+    roles: ['FINANCE', 'DIRECTOR'],
+    render: function (params) {
+      return Promise.all([App.api('reports.daily', { date: params.date || '' }), App.api('closings.list', {})]).then(function (res) {
+        var r = res[0];
+        var cl = res[1];
+        var dateField = App.field({ label: 'วันที่รับเงิน', type: 'date', value: r.date, max: r.today });
+        var c = r.closing;
+        var statusBadges = [];
+        if (c) statusBadges.push(App.badge('ปิดยอดแล้ว', 'success'), h('span', { class: 'muted small', text: 'เมื่อ ' + App.fmt.datetime(c.closedAt) + ' โดย ' + c.closedBy + ' · รหัสตรวจสอบ ' + c.verifyCode }));
+        else statusBadges.push(App.badge(r.rows.length ? 'ยังไม่ปิดยอด' : 'ไม่มีการรับเงิน', r.rows.length ? 'warning' : 'muted'));
+        if (r.history.length) statusBadges.push(App.badge('เคยเปิดยอดใหม่ ' + r.history.length + ' ครั้ง', 'muted'));
+        var actions = [];
+        if (r.canClose) actions.push(button('ปิดยอดวันนี้', '', function () { openCloseDay(r); }, 'check'));
+        if (r.canReopen) actions.push(button('เปิดยอดใหม่', 'danger', function () { openReopenDay(r); }));
+        var notes = [];
+        if (!c && r.pendingCount) notes.push(h('div', { class: 'alert alert-warning', text: 'มีคำขอยกเลิกหรือแก้ไขใบเสร็จของวันนี้รอผู้อำนวยการพิจารณา ' + r.pendingCount + ' รายการ จึงยังปิดยอดไม่ได้' }));
+        if (c && r.matches === false) notes.push(h('div', { class: 'alert alert-error', text: 'รายการรับเงินของวันนี้ไม่ตรงกับตอนปิดยอด (อาจมีการแก้ไขชีตโดยตรง) กรุณาให้ผู้ดูแลระบบตรวจประวัติการใช้งานและความถูกต้องของข้อมูล' }));
+        r.history.forEach(function (x) {
+          notes.push(h('div', { class: 'alert alert-info', text: 'เคยปิดยอดเมื่อ ' + App.fmt.datetime(x.closedAt) + ' (' + x.receiptCount + ' ฉบับ ' + App.fmt.money(x.totalSatang) + ') และผู้อำนวยการเปิดยอดใหม่เมื่อ ' + App.fmt.datetime(x.reopenedAt) + ' เหตุผล: ' + x.reopenReason }));
+        });
+        var days = App.table({
+          rows: cl.rows,
+          columns: [
+            { label: 'วันที่', className: 'nowrap', render: function (x) { return App.fmt.date(x.date); } },
+            { label: 'ใบเสร็จ', className: 'num', render: function (x) { return x.receiptCount + (x.voidedCount ? ' (ยกเลิก ' + x.voidedCount + ')' : ''); } },
+            { label: 'ยอดรวม', className: 'num', render: function (x) { return amt(x.totalSatang); } },
+            { label: 'สถานะ', render: function (x) {
+              if (x.changedAfterClose) return App.badge('ข้อมูลเปลี่ยนหลังปิดยอด', 'danger');
+              if (x.closed) return App.badge('ปิดยอดแล้ว', 'success');
+              return App.badge(x.date === cl.today ? 'วันนี้ ยังไม่ปิดยอด' : 'ยังไม่ปิดยอด', x.date === cl.today ? 'muted' : 'warning');
+            } },
+          ],
+          onRowClick: function (x) { App.go('report-daily', { date: x.date }); },
+          empty: 'ไม่มีการรับเงินใน 30 วันล่าสุด',
+        });
+        return reportPage('รายงานการรับเงินประจำวัน', 'ตรวจรายงานกับเงินและสำเนาใบเสร็จ พิมพ์ให้ผู้เกี่ยวข้องลงนาม แล้วปิดยอดประจำวัน',
+          [dateField.wrap, showButton(function () { App.go('report-daily', { date: dateField.get() }); })],
+          h('div', null,
+            h('div', { class: 'card no-print', style: { marginBottom: '14px' } }, h('div', { class: 'card-body' },
+              h('div', { class: 'status-line' }, statusBadges),
+              notes.length ? h('div', { class: 'stack', style: { marginTop: '10px' } }, notes) : null,
+              actions.length ? h('div', { class: 'toolbar', style: { marginTop: '12px', marginBottom: '0' } }, actions) : null)),
+            dailyDoc(r),
+            h('div', { class: 'card no-print' },
+              h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'สถานะการปิดยอด 30 วันล่าสุด' })),
+              h('div', { class: 'card-body' }, days))));
+      });
+    },
+  });
+
+  // ==========================================================================
+  // 3–4. รายงานการรับเงินแยกตามห้อง / ระดับชั้น
+  // ==========================================================================
+  function collectionsDoc(r, groupBy) {
+    var rows = [];
+    var multiYear = r.years.length > 1;
+    r.grades.forEach(function (g) {
+      var yearNote = multiYear ? ' (ปีการศึกษา ' + g.year + ')' : '';
+      if (groupBy === 'room') {
+        g.rooms.forEach(function (x) { rows.push({ label: x.label + yearNote, students: x.students, receipts: x.receipts, satang: x.satang }); });
+        if (g.rooms.length > 1) rows.push({ _class: 'sub', label: 'รวม ' + g.label + yearNote, students: g.students, receipts: g.receipts, satang: g.satang, sub: true });
+      } else {
+        rows.push({ label: g.label + yearNote, students: g.students, receipts: g.receipts, satang: g.satang });
+      }
+    });
+    var seq = 0;
+    var columns = [
+      { label: 'ที่', className: 'center', render: function (x) { return x.sub ? '' : String(++seq); } },
+      { label: groupBy === 'room' ? 'ห้อง' : 'ระดับชั้น', render: function (x) { return x.label; } },
+      { label: 'จำนวนนักเรียน', className: 'num', render: function (x) { return String(x.students); } },
+      { label: 'จำนวนใบเสร็จ', className: 'num', render: function (x) { return String(x.receipts); } },
+      { label: 'จำนวนเงิน (บาท)', className: 'num', render: function (x) { return amt(x.satang); } },
+    ];
+    var foot = [{ cells: [
+      { text: 'รวมทั้งสิ้น', colspan: 2 },
+      { text: String(r.total.students), className: 'num' },
+      { text: String(r.total.receipts), className: 'num' },
+      { text: amt(r.total.satang), className: 'num' }] }];
+    var title = groupBy === 'room' ? 'รายงานการรับเงินแยกตามห้อง' : 'รายงานการรับเงินแยกตามระดับชั้น';
+    return h('div', { class: 'doc' },
+      docHead(r.meta, title, r.period.label + ' (' + r.period.rangeLabel + ')'),
+      docTable(columns, rows, foot, 'ไม่มีการรับเงินในช่วงเวลานี้'),
+      h('div', { class: 'doc-lines' },
+        line('จำนวนเงินรวม (ตัวอักษร)', '(' + r.total.text + ')'),
+        r.byChannel.length ? line('แยกตามช่องทาง', r.byChannel.map(function (x) { return x.channel + ' ' + amt(x.satang) + ' บาท (' + x.count + ' ฉบับ)'; }).join(' · ')) : null,
+        r.unallocatedSatang ? h('div', { class: 'text-danger strong', text: 'มียอดที่ไม่ได้ตัดชำระรายการใด ' + amt(r.unallocatedSatang) + ' บาท กรุณาตรวจสอบ' }) : null),
+      h('div', { class: 'doc-note', text: 'หมายเหตุ: นับตามวันที่รับเงิน เฉพาะใบเสร็จที่มีผล ชั้น/ห้องเป็นของรายการเรียกเก็บ ณ วันที่เรียกเก็บ ' +
+        'ยอดค้างจากปีก่อนที่รับในช่วงนี้แสดงพร้อมปีการศึกษาของรายการ ใบเสร็จ 1 ฉบับที่ชำระหลายรายการอาจนับในหลายกลุ่ม แต่ยอดรวมทั้งสิ้นนับไม่ซ้ำ' }),
+      preparerAndDirector(r.meta),
+      docFoot(r.meta, 'ข้อมูล ณ ' + formatThaiDateTime_(r.meta.generatedAt)));
+  }
+
+  App.defineRoute('report-collections', {
+    title: 'รายงานการรับเงินแยกตามห้องและระดับชั้น',
+    roles: ['FINANCE', 'DIRECTOR'],
+    render: function (params) {
+      var groupBy = params.groupBy === 'grade' ? 'grade' : 'room';
+      return Promise.all([App.api('reports.collections', periodPayload(params)), App.api('years.list')]).then(function (res) {
+        var r = res[0];
+        var period = periodFields(params, res[1], r.meta.generatedAt.slice(0, 10));
+        var by = App.field({ label: 'แยกตาม', type: 'select', value: groupBy, options: [{ value: 'room', label: 'ห้อง' }, { value: 'grade', label: 'ระดับชั้น' }] });
+        return reportPage(groupBy === 'room' ? 'รายงานการรับเงินแยกตามห้อง' : 'รายงานการรับเงินแยกตามระดับชั้น',
+          'เงินที่รับในช่วงเวลา แยกตามชั้นและห้องของรายการเรียกเก็บ',
+          [by.wrap].concat(period.wraps).concat([showButton(function () { App.go('report-collections', Object.assign(period.get(), { groupBy: by.get() })); })]),
+          collectionsDoc(r, groupBy));
+      });
+    },
+  });
+
+  // ==========================================================================
+  // 5. รายงานยอดค้างชำระ (แบบทางการ)
+  // ==========================================================================
+  App.defineRoute('report-arrears', {
+    title: 'รายงานยอดค้างชำระ',
+    roles: ['FINANCE', 'DIRECTOR'],
+    render: function (params) {
+      var year = params.year || App.state.me.school.currentAcademicYear;
+      return Promise.all([App.api('arrears.summary', { year: year }), App.api('years.list'), App.api('settings.get')]).then(function (res) {
+        var r = res[0];
+        var meta = { school: App.state.me.school, generatedAt: r.generatedAt, generatedBy: App.state.me.user.displayName, signers: signersFromSettings(res[2]) };
+        var grade = params.grade || '';
+        var yearSel = App.field({ label: 'ปีการศึกษา', type: 'select', options: yearOptions(res[1]), value: String(r.year) });
+        var gradeSel = App.field({ label: 'ชั้น', type: 'select', value: grade,
+          options: [{ value: '', label: 'ทุกชั้น' }].concat(r.grades.map(function (g) { return { value: g.gradeLevel, label: g.gradeLevel }; })) });
+        var summary = [];
+        r.grades.forEach(function (g) {
+          if (grade && g.gradeLevel !== grade) return;
+          summary.push({ label: g.gradeLevel, f: g, _class: 'sub' });
+          if (g.rooms.length > 1) g.rooms.forEach(function (x) { summary.push({ label: 'ห้อง ' + (x.room || '–'), f: x, _class: 'indent' }); });
+        });
+        if (!grade && r.other.students) summary.push({ label: 'ไม่มีชั้นเรียนในปีนี้ (ย้ายออก/จบการศึกษา)', f: r.other, _class: 'sub' });
+        var totals = grade ? r.grades.filter(function (g) { return g.gradeLevel === grade; })[0] : r.school;
+        var cols = [
+          { label: 'ชั้น/ห้อง', render: function (x) { return x.label; } },
+          { label: 'นักเรียน', className: 'num', render: function (x) { return String(x.f.students); } },
+          { label: 'ค้าง (คน)', className: 'num', render: function (x) { return String(x.f.owingStudents); } },
+          { label: 'ค้างปี ' + r.year, className: 'num', render: function (x) { return amt(x.f.currentSatang); } },
+          { label: 'ค้างจากปีก่อน', className: 'num', render: function (x) { return amt(x.f.priorSatang); } },
+          { label: 'รวมค้าง', className: 'num', render: function (x) { return amt(x.f.totalSatang); } },
+          { label: 'เลยกำหนด', className: 'num', render: function (x) { return amt(x.f.overdueSatang); } },
+        ];
+        var foot = totals ? [{ cells: [
+          { text: 'รวม' }, { text: String(totals.students), className: 'num' }, { text: String(totals.owingStudents), className: 'num' },
+          { text: amt(totals.currentSatang), className: 'num' }, { text: amt(totals.priorSatang), className: 'num' },
+          { text: amt(totals.totalSatang), className: 'num' }, { text: amt(totals.overdueSatang), className: 'num' }] }] : [];
+        var owing = r.rows.filter(function (x) { return x.totalSatang > 0 && (!grade || x.gradeLevel === grade); });
+        var listCols = [
+          { label: 'ที่', className: 'center', render: function (x, i) { return String(i + 1); } },
+          { label: 'ชั้น/ห้อง', className: 'nowrap', render: function (x) { return x.enrolled ? x.classLabel : '–'; } },
+          { label: 'เลขที่', className: 'center', render: function (x) { return x.classNo === null ? '–' : String(x.classNo); } },
+          { label: 'เลขประจำตัว', className: 'nowrap', render: function (x) { return x.studentNo; } },
+          { label: 'ชื่อ-สกุล', render: function (x) { return x.fullName + (!x.enrolled ? ' (' + x.statusLabel + ')' : ''); } },
+          { label: 'ค้างปีนี้', className: 'num', render: function (x) { return amt(x.currentSatang); } },
+          { label: 'ค้างจากปีก่อน', className: 'num', render: function (x) { return amt(x.priorSatang); } },
+          { label: 'รวมค้าง', className: 'num', render: function (x) { return amt(x.totalSatang); } },
+          { label: 'เลยกำหนด', className: 'num', render: function (x) { return amt(x.overdueSatang); } },
+        ];
+        var docEl = h('div', { class: 'doc' },
+          docHead(meta, 'รายงานยอดค้างชำระเงินบำรุงการศึกษา', 'ปีการศึกษา ' + r.year + (grade ? ' ชั้น ' + grade : '') + ' · ข้อมูล ณ ' + formatThaiDateTime_(r.generatedAt)),
+          h('div', { class: 'doc-section', text: '1. สรุปตามชั้นและห้อง' }),
+          docTable(cols, summary, foot),
+          h('div', { class: 'doc-section', text: '2. รายชื่อนักเรียนที่ค้างชำระ (' + owing.length + ' คน)' }),
+          docTable(listCols, owing, [], 'ไม่มีนักเรียนที่ค้างชำระ'),
+          h('div', { class: 'doc-note', text: 'หมายเหตุ: ค้างจากปีก่อน = รายการเรียกเก็บของปีการศึกษาก่อนหน้าที่ยังชำระไม่ครบ · เลยกำหนด = ยอดค้างของรายการที่เลยวันครบกำหนดชำระแล้ว' }),
+          preparerAndDirector(meta),
+          docFoot(meta, 'ยอด ณ ขณะออกรายงาน'));
+        return reportPage('รายงานยอดค้างชำระ', 'รายงานแบบทางการสำหรับพิมพ์และลงนาม (ดูรายละเอียดและค้นหารายชื่อได้ในหน้า "ยอดค้างชำระ")',
+          [yearSel.wrap, gradeSel.wrap, showButton(function () { App.go('report-arrears', { year: Number(yearSel.get()), grade: gradeSel.get() }); })],
+          docEl);
+      });
+    },
+  });
+
+  function signersFromSettings(s) {
+    var v = {};
+    ((s && s.groups) || []).forEach(function (g) { g.items.forEach(function (it) { v[it.key] = it.value; }); });
+    return {
+      financeName: v.FINANCE_OFFICER_NAME || '', financePosition: v.FINANCE_OFFICER_POSITION || '',
+      directorName: v.DIRECTOR_NAME || '', directorPosition: v.DIRECTOR_POSITION || '',
+    };
+  }
+
+  // ==========================================================================
+  // 6. รายงานทะเบียนคุมใบเสร็จ
+  // ==========================================================================
+  App.defineRoute('report-register', {
+    title: 'รายงานทะเบียนคุมใบเสร็จ',
+    roles: ['FINANCE', 'DIRECTOR'],
+    render: function (params) {
+      return Promise.all([App.api('receipts.books', {}), App.api('settings.get')]).then(function (res) {
+        var books = res[0].books || res[0].rows || res[0];
+        var settings = res[1];
+        if (!books.length) {
+          return reportPage('รายงานทะเบียนคุมใบเสร็จ', '', [], h('div', { class: 'empty', text: 'ยังไม่มีเล่มใบเสร็จในระบบ' }));
+        }
+        var bookId = params.bookId || (books.filter(function (b) { return b.status === 'ACTIVE'; })[0] || books[0]).bookId;
+        return App.api('receipts.book', { bookId: bookId }).then(function (r) {
+          var b = r.book;
+          var meta = { school: App.state.me.school, generatedAt: null, generatedBy: App.state.me.user.displayName, signers: signersFromSettings(settings) };
+          var bookSel = App.field({ label: 'เล่มใบเสร็จ', type: 'select', value: bookId,
+            options: books.map(function (x) { return { value: x.bookId, label: 'เล่มที่ ' + x.bookNo + ' (' + x.startNo + '–' + x.endNo + ') ' + x.statusLabel }; }) });
+          var rows = [];
+          var run = null;
+          function flush() {
+            if (!run) return;
+            rows.push({ _class: null, no: run.from === run.to ? String(run.from) : run.from + '–' + run.to, statusLabel: run.label, count: run.to - run.from + 1, range: true });
+            run = null;
+          }
+          r.numbers.forEach(function (n) {
+            if (n.status === 'UNUSED' || n.status === 'CLOSED_UNUSED') {
+              if (run && run.status === n.status && run.to === n.no - 1) { run.to = n.no; return; }
+              flush();
+              run = { from: n.no, to: n.no, status: n.status, label: n.statusLabel };
+              return;
+            }
+            flush();
+            rows.push(Object.assign({ _class: n.status === 'CANCELLED' ? 'void' : null }, n, { no: String(n.no) }));
+          });
+          flush();
+          var columns = [
+            { label: 'เลขที่', className: 'nowrap center', render: function (x) { return x.no; } },
+            { label: 'วันที่', className: 'nowrap', render: function (x) { return x.range ? '' : App.fmt.date(x.date); } },
+            { label: 'นักเรียน', render: function (x) { return x.range ? '' : (x.studentName ? x.studentName + (x.studentNo ? ' (' + x.studentNo + ')' : '') : ''); } },
+            { label: 'จำนวนเงิน (บาท)', className: 'num', render: function (x) { return x.range || x.amountSatang === null || x.amountSatang === undefined ? '' : h('span', { class: 'amt', text: amt(x.amountSatang) }); } },
+            { label: 'สถานะ', render: function (x) { return x.range ? x.statusLabel + ' (' + x.count + ' เลขที่)' : x.statusLabel + (x.corrected ? ' (แก้ไขรายการแล้ว)' : ''); } },
+            { label: 'หมายเหตุ', render: function (x) { return x.cancelReason ? x.cancelTypeLabel + ': ' + x.cancelReason : ''; } },
+          ];
+          var docEl = h('div', { class: 'doc' },
+            docHead(meta, 'ทะเบียนคุมใบเสร็จรับเงิน', 'เล่มที่ ' + b.bookNo + ' เลขที่ ' + b.startNo + ' ถึง ' + b.endNo + ' (' + b.total + ' ฉบับ) · สถานะ ' + b.statusLabel),
+            h('div', { class: 'doc-lines' },
+              line('ได้รับเล่ม', thaiDate(b.receivedDate) + (b.responsibleName ? ' · ผู้รับผิดชอบ ' + b.responsibleName : '')),
+              line('เริ่มใช้', thaiDate(b.startUseDate) + (b.closedDate ? ' · ปิดเล่ม ' + thaiDate(b.closedDate) + (b.closeReason ? ' (' + b.closeReason + ')' : '') : '')),
+              line('สรุป', 'ใช้แล้ว ' + b.usedCount + ' · ยกเลิก ' + b.cancelledCount + (b.pendingCount ? ' · รออนุมัติยกเลิก ' + b.pendingCount : '') +
+                ' · ยังไม่ใช้ ' + b.remaining + (b.closedUnused ? ' · ปิดเล่มโดยไม่ใช้ ' + b.closedUnused : '') + ' ฉบับ')),
+            docTable(columns, rows),
+            preparerAndDirector(meta),
+            h('div', { class: 'doc-foot' }, h('span', { text: 'เลขที่ที่ยังไม่ใช้ติดกันแสดงเป็นช่วง' }),
+              h('span', { text: 'ออกรายงานเมื่อ ' + formatThaiDateTime_(nowText()) + ' โดย ' + meta.generatedBy })));
+          return reportPage('รายงานทะเบียนคุมใบเสร็จ', 'ทุกเลขที่ของเล่ม เรียงตามเลขที่',
+            [bookSel.wrap, showButton(function () { App.go('report-register', { bookId: bookSel.get() }); })], docEl);
+        });
+      });
+    },
+  });
+
+  function nowText() {
+    var d = new Date();
+    var p = function (n) { return (n < 10 ? '0' : '') + n; };
+    return d.getFullYear() + '-' + p(d.getMonth() + 1) + '-' + p(d.getDate()) + ' ' + p(d.getHours()) + ':' + p(d.getMinutes()) + ':' + p(d.getSeconds());
+  }
+
+  // ==========================================================================
+  // 7. รายงานใบเสร็จยกเลิก
+  // ==========================================================================
+  App.defineRoute('report-cancelled', {
+    title: 'รายงานใบเสร็จยกเลิก',
+    roles: ['FINANCE', 'DIRECTOR'],
+    render: function (params) {
+      return Promise.all([App.api('reports.cancelled', periodPayload(params)), App.api('years.list')]).then(function (res) {
+        var r = res[0];
+        var period = periodFields(params, res[1], r.meta.generatedAt.slice(0, 10));
+        var t = r.totals;
+        var columns = [
+          { label: 'ที่', className: 'center', render: function (x, i) { return String(i + 1); } },
+          { label: 'เล่มที่/เลขที่', className: 'nowrap', render: function (x) { return x.bookNo + '/' + x.receiptNo; } },
+          { label: 'ประเภท', render: function (x) { return x.cancelType === 'SPOILED' ? 'เขียนผิด/ชำรุด' : 'ยกเลิกใบเสร็จที่รับเงินแล้ว'; } },
+          { label: 'วันที่ในใบเสร็จ', className: 'nowrap', render: function (x) { return App.fmt.date(x.receiptDate); } },
+          { label: 'นักเรียน', render: function (x) { return x.studentName; } },
+          { label: 'จำนวนเงิน', className: 'num', render: function (x) { return x.amountSatang === null ? '' : amt(x.amountSatang); } },
+          { label: 'เหตุผล', render: function (x) { return x.reason; } },
+          { label: 'ผู้ขอ / วันที่ขอ', render: function (x) { return x.requestedBy + ' ' + App.fmt.date(x.requestedAt); } },
+          { label: 'ผลการพิจารณา', render: function (x) {
+            return x.statusLabel + (x.decidedBy ? ' โดย ' + x.decidedBy : '') + (x.decisionNote && x.status !== 'APPROVED' ? ' (' + x.decisionNote + ')' : '');
+          } },
+        ];
+        var docEl = h('div', { class: 'doc' },
+          docHead(r.meta, 'รายงานใบเสร็จยกเลิก', r.period.label + ' (' + r.period.rangeLabel + ')'),
+          docTable(columns, r.rows, [], 'ไม่มีการยกเลิกในช่วงเวลานี้'),
+          h('div', { class: 'doc-lines' },
+            line('ยกเลิกใบเสร็จที่รับเงินแล้ว (อนุมัติ)', t.voidCount + ' ฉบับ รวม ' + amt(t.voidSatang) + ' บาท'),
+            line('ยกเลิกเลขที่ที่เขียนผิด/ชำรุด (อนุมัติ)', t.spoiledCount + ' ฉบับ'),
+            line('รอพิจารณา', t.pendingCount + ' รายการ · ไม่อนุมัติหรือถอนคำขอ ' + t.notApprovedCount + ' รายการ')),
+          h('div', { class: 'doc-note', text: 'หมายเหตุ: นับตามวันที่ยื่นขอยกเลิก ใบเสร็จฉบับจริงที่ยกเลิกต้องเก็บไว้ครบทุกฉบับ' }),
+          preparerAndDirector(r.meta),
+          docFoot(r.meta, ''));
+        return reportPage('รายงานใบเสร็จยกเลิก', 'คำขอยกเลิกที่ยื่นในช่วงเวลา พร้อมผลการพิจารณา',
+          period.wraps.concat([showButton(function () { App.go('report-cancelled', period.get()); })]), docEl);
+      });
+    },
+  });
+
+  // ==========================================================================
+  // 8. รายงานสรุปประจำปีการศึกษา
+  // ==========================================================================
+  App.defineRoute('report-annual', {
+    title: 'รายงานสรุปประจำปีการศึกษา',
+    roles: ['FINANCE', 'DIRECTOR'],
+    render: function (params) {
+      var year = params.year || App.state.me.school.currentAcademicYear;
+      return Promise.all([App.api('reports.annual', { year: year }), App.api('years.list')]).then(function (res) {
+        var r = res[0];
+        var o = r.overall;
+        var pct = function (paid, net) { return net > 0 ? (Math.floor(paid * 1000 / net) / 10).toFixed(1) + '%' : '–'; };
+        var yearSel = App.field({ label: 'ปีการศึกษา', type: 'select', options: yearOptions(res[1]), value: String(r.year) });
+        var billCols = function (first) {
+          return [
+            first,
+            { label: 'จำนวนรายการ', className: 'num', render: function (x) { return String(x.count); } },
+            { label: 'ยอดเรียกเก็บ', className: 'num', render: function (x) { return amt(x.grossSatang); } },
+            { label: 'ลดหย่อน/ยกเว้น', className: 'num', render: function (x) { return amt(x.adjustSatang); } },
+            { label: 'สุทธิ', className: 'num', render: function (x) { return amt(x.netSatang); } },
+            { label: 'รับชำระแล้ว', className: 'num', render: function (x) { return amt(x.paidSatang); } },
+            { label: 'ร้อยละ', className: 'num', render: function (x) { return pct(x.paidSatang, x.netSatang); } },
+            { label: 'ค้างชำระ', className: 'num', render: function (x) { return amt(x.outstandingSatang); } },
+          ];
+        };
+        var totalFoot = function (label) {
+          return [{ cells: [{ text: label }, { text: String(o.count), className: 'num' }, { text: amt(o.grossSatang), className: 'num' },
+            { text: amt(o.adjustSatang), className: 'num' }, { text: amt(o.netSatang), className: 'num' }, { text: amt(o.paidSatang), className: 'num' },
+            { text: pct(o.paidSatang, o.netSatang), className: 'num' }, { text: amt(o.outstandingSatang), className: 'num' }] }];
+        };
+        var monthRows = r.months;
+        var docEl = h('div', { class: 'doc' },
+          docHead(r.meta, 'รายงานสรุปการจัดเก็บเงินบำรุงการศึกษา', 'ปีการศึกษา ' + r.year + ' · ข้อมูล ณ ' + formatThaiDateTime_(r.meta.generatedAt)),
+          h('div', { class: 'doc-section', text: '1. ภาพรวมการเรียกเก็บของปีการศึกษา ' + r.year }),
+          h('div', { class: 'doc-lines' },
+            line('นักเรียนที่มีรายการเรียกเก็บ', o.students + ' คน (' + o.count + ' รายการ)'),
+            line('ยอดเรียกเก็บ', amt(o.grossSatang) + ' บาท'),
+            line('ลดหย่อน', r.adjustments.DISCOUNT.count + ' รายการ ' + amt(r.adjustments.DISCOUNT.satang) + ' บาท · ยกเว้น ' + r.adjustments.EXEMPTION.count + ' รายการ ' + amt(r.adjustments.EXEMPTION.satang) + ' บาท'),
+            line('ยอดเรียกเก็บสุทธิ', amt(o.netSatang) + ' บาท'),
+            line('รับชำระแล้ว', amt(o.paidSatang) + ' บาท (' + pct(o.paidSatang, o.netSatang) + ')'),
+            line('ค้างชำระ', amt(o.outstandingSatang) + ' บาท' + (o.overdueSatang ? ' (เลยกำหนด ' + amt(o.overdueSatang) + ' บาท)' : '')),
+            r.cancelled.count ? line('รายการเรียกเก็บที่ยกเลิก (ไม่นับรวม)', r.cancelled.count + ' รายการ ' + amt(r.cancelled.grossSatang) + ' บาท') : null,
+            line('ยอดค้างจากปีการศึกษาก่อนหน้า ณ ขณะนี้', amt(r.priorOutstandingSatang) + ' บาท')),
+          h('div', { class: 'doc-section', text: '2. แยกตามระดับชั้น' }),
+          docTable(billCols({ label: 'ระดับชั้น', render: function (x) { return x.gradeLevel + ' (' + x.students + ' คน)'; } }), r.grades, totalFoot('รวม'), 'ยังไม่มีรายการเรียกเก็บ'),
+          h('div', { class: 'doc-section', text: '3. แยกตามรายการเรียกเก็บ' }),
+          docTable(billCols({ label: 'รายการ', render: function (x) { return x.label; } }), r.items, totalFoot('รวม'), 'ยังไม่มีรายการเรียกเก็บ'),
+          h('div', { class: 'doc-section', text: '4. เงินที่รับรายเดือน (ตามวันที่รับเงิน ' + r.period.rangeLabel + ')' }),
+          docTable([
+            { label: 'เดือน', render: function (x) { return x.label; } },
+            { label: 'จำนวนใบเสร็จ', className: 'num', render: function (x) { return String(x.count); } },
+            { label: 'จำนวนเงิน (บาท)', className: 'num', render: function (x) { return amt(x.satang); } },
+          ], monthRows, [{ cells: [{ text: 'รวม' }, { text: String(r.cash.count), className: 'num' }, { text: amt(r.cash.satang), className: 'num' }] }]),
+          h('div', { class: 'doc-lines' },
+            line('เงินที่รับเป็นของปีการศึกษา ' + r.year, amt(r.cash.thisYearSatang) + ' บาท'),
+            line('เงินที่รับเป็นยอดค้างของปีก่อนหน้า', amt(r.cash.priorSatang) + ' บาท'),
+            r.cash.laterSatang ? line('เงินที่รับเป็นของปีการศึกษาถัดไป', amt(r.cash.laterSatang) + ' บาท') : null),
+          h('div', { class: 'doc-section', text: '5. ใบเสร็จรับเงินในช่วงปีการศึกษา' }),
+          h('div', { class: 'doc-lines' },
+            line('ใบเสร็จที่มีผล', r.receipts.used + ' ฉบับ' + (r.receipts.books.length ? ' (เล่มที่ ' + r.receipts.books.join(', ') + ')' : '')),
+            line('ยกเลิกใบเสร็จที่รับเงินแล้ว', r.receipts.voided + ' ฉบับ · เลขที่ที่เขียนผิด/ชำรุด ' + r.receipts.spoiled + ' ฉบับ')),
+          h('div', { class: 'doc-note', text: 'หมายเหตุ: ข้อ 1–3 นับตามรายการเรียกเก็บของปีการศึกษา ส่วนข้อ 4–5 นับตามวันที่รับเงินในช่วง ' + r.period.rangeLabel + ' (D-39) ยอดค้างเป็นยอด ณ ขณะออกรายงาน' }),
+          preparerAndDirector(r.meta),
+          docFoot(r.meta, ''));
+        return reportPage('รายงานสรุปประจำปีการศึกษา', 'สรุปการเรียกเก็บ การรับเงิน และการใช้ใบเสร็จของปีการศึกษา',
+          [yearSel.wrap, showButton(function () { App.go('report-annual', { year: Number(yearSel.get()) }); })], docEl);
+      });
+    },
+  });
+
+  // ==========================================================================
+  // 9. รายงานการใช้ใบเสร็จประจำปีงบประมาณ (D-15)
+  // ==========================================================================
+  App.defineRoute('report-receipt-usage', {
+    title: 'รายงานการใช้ใบเสร็จประจำปีงบประมาณ',
+    roles: ['FINANCE', 'DIRECTOR'],
+    render: function (params) {
+      return App.api('reports.receiptUsage', { fiscalYear: params.fiscalYear || '' }).then(function (r) {
+        var fyNow = fiscalYearOfDate_(r.meta.generatedAt.slice(0, 10));
+        var opts = [];
+        for (var fy = fyNow; fy >= fyNow - 5; fy--) opts.push({ value: String(fy), label: 'ปีงบประมาณ ' + fy });
+        var fySel = App.field({ label: 'ปีงบประมาณ', type: 'select', options: opts, value: String(r.fiscalYear) });
+        var t = r.total;
+        var columns = [
+          { label: 'เล่มที่', className: 'nowrap', render: function (x) { return x.bookNo; } },
+          { label: 'เลขที่', className: 'nowrap', render: function (x) { return x.startNo + '–' + x.endNo; } },
+          { label: 'ยกมา', className: 'num', render: function (x) { return String(x.broughtForward); } },
+          { label: 'รับเข้า', className: 'num', render: function (x) { return String(x.received); } },
+          { label: 'ใช้', className: 'num', render: function (x) { return String(x.used); } },
+          { label: 'เลขที่ที่ใช้ในปี', className: 'nowrap', render: function (x) { return x.usedFrom === null ? '–' : (x.usedFrom === x.usedTo ? String(x.usedFrom) : x.usedFrom + '–' + x.usedTo); } },
+          { label: 'ยกเลิก', className: 'num', render: function (x) { return String(x.cancelled + x.pending) + (x.pending ? ' (รอ ' + x.pending + ')' : ''); } },
+          { label: 'ปิดเล่มไม่ใช้', className: 'num', render: function (x) { return String(x.closedUnused); } },
+          { label: 'คงเหลือ', className: 'num', render: function (x) { return String(x.remaining); } },
+          { label: 'สถานะเล่ม', render: function (x) { return x.statusLabel; } },
+        ];
+        var foot = [{ cells: [{ text: 'รวม', colspan: 2 }, { text: String(t.broughtForward), className: 'num' }, { text: String(t.received), className: 'num' },
+          { text: String(t.used), className: 'num' }, { text: '' }, { text: String(t.cancelled + t.pending), className: 'num' },
+          { text: String(t.closedUnused), className: 'num' }, { text: String(t.remaining), className: 'num' }, { text: '' }] }];
+        var docEl = h('div', { class: 'doc' },
+          docHead(r.meta, 'รายงานการใช้ใบเสร็จรับเงินประจำปีงบประมาณ ' + r.fiscalYear, r.period.rangeLabel + (r.asOf < r.period.to ? ' (ข้อมูลถึงวันที่ ' + thaiDate(r.asOf) + ')' : '')),
+          docTable(columns, r.rows, foot, 'ไม่มีเล่มใบเสร็จที่ใช้ในปีงบประมาณนี้'),
+          h('div', { class: 'doc-note', text: 'หมายเหตุ: ยกมา = เลขที่ที่ยังไม่ใช้ ณ ต้นปีงบประมาณ · คงเหลือ = ยกมา + รับเข้า − ใช้ − ยกเลิก − ปิดเล่มโดยไม่ใช้ ' +
+            '(ใบเสร็จใช้ต่อเนื่องข้ามปีงบประมาณได้ ตาม D-15) วันที่ของเลขที่ที่ยกเลิกก่อนบันทึกรับเงินใช้วันที่ยื่นคำขอ' }),
+          preparerAndDirector(r.meta),
+          docFoot(r.meta, ''));
+        return reportPage('รายงานการใช้ใบเสร็จประจำปีงบประมาณ', 'ปีงบประมาณ = 1 ตุลาคม ถึง 30 กันยายน',
+          [fySel.wrap, showButton(function () { App.go('report-receipt-usage', { fiscalYear: Number(fySel.get()) }); })], docEl);
+      });
+    },
+  });
+
+  // ==========================================================================
+  // 1. เอกสารแจ้งยอดเรียกเก็บเงิน (D-21: สุภาพ แจ้งให้ทราบ ไม่มีถ้อยคำเชิงบังคับ)
+  // ==========================================================================
+  function noticeLetter(n, r, signer) {
+    var meta = r.meta;
+    var school = meta.school;
+    var contact = school.phone ? ' โทร ' + school.phone : '';
+    var signName = signer === 'director' ? meta.signers.directorName : meta.signers.financeName;
+    var signPos = signer === 'director' ? meta.signers.directorPosition : meta.signers.financePosition;
+    var items = n.items.map(function (x, i) { return Object.assign({ no: i + 1 }, x); });
+    return h('div', { class: 'doc doc-letter page-break' },
+      h('div', { class: 'letter-head' },
+        h('div', { class: 'strong', text: school.name }),
+        school.address ? h('div', { text: school.address + contact }) : (contact ? h('div', { text: contact.trim() }) : null)),
+      h('div', { class: 'letter-date', text: 'วันที่ ' + thaiDate(r.issueDate) }),
+      h('div', { class: 'letter-meta' },
+        h('span', { class: 'strong', text: 'เรื่อง' }), h('span', { text: 'แจ้งยอดเงินบำรุงการศึกษา' }),
+        h('span', { class: 'strong', text: 'เรียน' }), h('span', { text: 'ผู้ปกครองของ ' + n.fullName + ' ชั้น ' + n.classLabel + (n.classNo ? ' เลขที่ ' + n.classNo : '') + ' เลขประจำตัว ' + n.studentNo })),
+      h('p', { text: school.name + ' ขอแจ้งรายการเงินบำรุงการศึกษาของนักเรียนที่ยังไม่ได้ชำระ ณ วันที่ ' + thaiDate(r.issueDate) + ' เพื่อโปรดทราบ ดังนี้' }),
+      docTable([
+        { label: 'ที่', className: 'center', render: function (x) { return String(x.no); } },
+        { label: 'รายการ', render: function (x) { return x.label; } },
+        { label: 'กำหนดชำระ', className: 'nowrap', render: function (x) { return x.dueDate ? thaiDate(x.dueDate) : '–'; } },
+        { label: 'ยอดเรียกเก็บ', className: 'num', render: function (x) { return amt(x.netSatang); } },
+        { label: 'ชำระแล้ว', className: 'num', render: function (x) { return amt(x.paidSatang); } },
+        { label: 'คงเหลือ (บาท)', className: 'num', render: function (x) { return amt(x.outstandingSatang); } },
+      ], items, [{ cells: [{ text: 'รวมยอดคงเหลือ', colspan: 5 }, { text: amt(n.totalSatang), className: 'num' }] }]),
+      h('div', { class: 'doc-lines', style: { textAlign: 'right' }, text: '(' + n.totalText + ')' }),
+      h('p', { text: 'หากท่านได้ชำระเงินแล้ว โรงเรียนขออภัยมา ณ ที่นี้ และขอความกรุณานำหลักฐานการชำระมาแจ้งเจ้าหน้าที่การเงิน เพื่อตรวจสอบและปรับปรุงข้อมูลให้ถูกต้อง' }),
+      h('p', { text: 'หากมีข้อสงสัย หรือมีความจำเป็นที่ต้องการปรึกษาเรื่องการชำระเงิน สามารถติดต่อเจ้าหน้าที่การเงินของโรงเรียนได้ในวันและเวลาราชการ' + contact }),
+      h('p', { text: 'จึงเรียนมาเพื่อโปรดทราบ และขอขอบพระคุณที่ให้การสนับสนุนการจัดการศึกษาของโรงเรียนด้วยดีเสมอมา' }),
+      h('div', { class: 'letter-sign' },
+        h('div', { text: 'ขอแสดงความนับถือ' }),
+        h('div', { style: { height: '42px' } }),
+        h('div', { text: '(' + (signName || DOTS) + ')' }),
+        h('div', { text: signPos || DOTS })));
+  }
+
+  App.defineRoute('report-notices', {
+    title: 'เอกสารแจ้งยอดเรียกเก็บเงิน',
+    roles: ['FINANCE', 'DIRECTOR'],
+    render: function (params) {
+      var year = params.year || App.state.me.school.currentAcademicYear;
+      var payload = { year: year, gradeLevel: params.gradeLevel || '', room: params.room || '', studentId: params.studentId || '' };
+      return Promise.all([App.api('reports.notices', payload), App.api('years.list'), App.api('students.list', { year: year })]).then(function (res) {
+        var r = res[0];
+        var roomsByGrade = res[2].rooms || {};
+        var grades = (res[2].gradeLevels || []).filter(function (g) { return roomsByGrade[g]; });
+        var yearSel = App.field({ label: 'ปีการศึกษา', type: 'select', options: yearOptions(res[1]), value: String(r.year) });
+        var gradeSel = App.field({ label: 'ชั้น', type: 'select', value: r.filter.gradeLevel,
+          options: [{ value: '', label: 'ทุกชั้น' }].concat(grades.map(function (g) { return { value: g, label: g }; })) });
+        var roomSel = App.field({ label: 'ห้อง', type: 'select' });
+        function fillRooms() {
+          clear(roomSel.input);
+          var rooms = roomsByGrade[gradeSel.get()] || [];
+          roomSel.input.appendChild(h('option', { value: '', text: gradeSel.get() ? 'ทุกห้อง' : '(เลือกชั้นก่อน)' }));
+          rooms.forEach(function (x) { roomSel.input.appendChild(h('option', { value: x, text: 'ห้อง ' + (x || '–') })); });
+          roomSel.input.value = rooms.indexOf(r.filter.room) !== -1 && gradeSel.get() === r.filter.gradeLevel ? r.filter.room : '';
+          roomSel.input.disabled = !gradeSel.get();
+        }
+        gradeSel.input.addEventListener('change', fillRooms);
+        fillRooms();
+        var signer = params.signer === 'director' ? 'director' : 'finance';
+        var signSel = App.field({ label: 'ผู้ลงนามในหนังสือ', type: 'select', value: signer,
+          options: [{ value: 'finance', label: 'เจ้าหน้าที่การเงิน' }, { value: 'director', label: 'ผู้อำนวยการ' }] });
+        var letters = r.notices.map(function (n) { return noticeLetter(n, r, signer); });
+        var info = h('div', { class: 'card no-print', style: { marginBottom: '14px' } }, h('div', { class: 'card-body' },
+          h('div', { class: 'status-line' },
+            App.badge(r.notices.length + ' ฉบับ', r.notices.length ? 'FINANCE' : 'muted'),
+            h('span', { class: 'muted', text: 'รวมยอดคงเหลือ ' + App.fmt.money(r.totalSatang) + ' · นักเรียน 1 คนต่อ 1 หน้า · เฉพาะผู้ที่มียอดค้าง (ไม่รวมผู้ที่ย้ายออก)' })),
+          h('div', { class: 'alert alert-info', style: { marginTop: '10px' },
+            text: 'ถ้อยคำในหนังสือนี้เป็นการแจ้งให้ทราบ ไม่มีข้อความเชิงบังคับหรือบทลงโทษนักเรียน ผู้อำนวยการควรตรวจถ้อยคำก่อนใช้ครั้งแรก (D-21) ' +
+              'ตรวจว่าตั้งค่าที่อยู่และเบอร์โทรศัพท์ของโรงเรียนไว้แล้ว (หน้าตั้งค่า)' })));
+        return reportPage('เอกสารแจ้งยอดเรียกเก็บเงิน', 'หนังสือแจ้งผู้ปกครอง ปีการศึกษา ' + r.year + ' (รวมยอดค้างจากปีก่อน)',
+          [yearSel.wrap, gradeSel.wrap, roomSel.wrap, signSel.wrap, showButton(function () {
+            App.go('report-notices', { year: Number(yearSel.get()), gradeLevel: gradeSel.get(), room: roomSel.get(), signer: signSel.get(), studentId: '' });
+          })],
+          h('div', null, info, letters.length ? letters : h('div', { class: 'empty', text: 'ไม่มีนักเรียนที่มียอดค้างตามเงื่อนไขนี้' })));
+      });
+    },
+  });
+})();
+</script>

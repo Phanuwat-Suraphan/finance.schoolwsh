@@ -192,6 +192,12 @@
     }));
   }
 
+  function daysSince(fromIso, toIso) {
+    var a = fromIso.split('-').map(Number);
+    var b = toIso.split('-').map(Number);
+    return Math.round((Date.UTC(b[0], b[1] - 1, b[2]) - Date.UTC(a[0], a[1] - 1, a[2])) / 86400000);
+  }
+
   App.defineRoute('home', {
     title: 'หน้าหลัก',
     roles: ALL,
@@ -208,12 +214,15 @@
             { text: 'เพิ่มผู้ใช้: เจ้าหน้าที่การเงิน และผู้อำนวยการ', help: 'กำหนดรหัสผ่านชั่วคราว แล้วแจ้งผู้ใช้เป็นการส่วนตัว ผู้ใช้ต้องเปลี่ยนรหัสผ่านเมื่อเข้าสู่ระบบครั้งแรก', route: 'users' },
             { text: 'ตรวจปีการศึกษาปัจจุบัน', route: 'years' },
             { text: 'ดูประวัติการใช้งาน และตรวจความถูกต้องของประวัติ', route: 'audit' },
+            { text: 'สำรองข้อมูล และตรวจว่าเปิดการสำรองอัตโนมัติรายวันไว้แล้ว', help: 'ไฟล์สำรองอยู่ใน Google Drive ของบัญชีเจ้าของระบบ กู้คืนได้จากหน้านี้', route: 'backups', button: 'สำรองข้อมูล' },
           ])));
       } else if (role === 'DIRECTOR') {
         card = h('div', { class: 'card' },
           h('div', { class: 'card-head' }, h('h2', { text: 'งานของผู้อำนวยการ' })),
           h('div', { class: 'card-body' }, stepList([
+            { text: 'ดูภาพรวมการเงินของปีการศึกษา: ยอดเรียกเก็บ ยอดรับ ยอดค้าง และความคืบหน้ารายชั้น', route: 'dashboard', button: 'ภาพรวม' },
             { text: 'พิจารณาคำขอลดหย่อน ยกเว้น และยกเลิกรายการเรียกเก็บ', help: 'ตรวจเหตุผลและเอกสารอ้างอิงก่อนอนุมัติ', route: 'approvals', button: 'คำขออนุมัติ' },
+            { text: 'ตรวจและลงนามรายงานรับเงินประจำวัน เปิดยอดใหม่เมื่อจำเป็นต้องแก้ไข', route: 'report-daily', button: 'รายงานประจำวัน' },
             { text: 'ดูรายการรับเงินประจำวันและยอดรวมแยกช่องทาง', route: 'payment-history', button: 'รายการรับเงิน' },
             { text: 'ดูอัตราเงินบำรุง ยอดเรียกเก็บ และยอดค้างของแต่ละชั้น', route: 'fees' },
             { text: 'ดูทะเบียนเล่มใบเสร็จ และเลขที่ที่ใช้ไป', route: 'receipt-books' },
@@ -228,6 +237,8 @@
             { text: 'ลงทะเบียนและเปิดใช้เล่มใบเสร็จรับเงินจากเล่มจริง', route: 'receipt-books', button: 'เล่มใบเสร็จ' },
             { text: 'รับชำระเงิน: เขียนใบเสร็จจริง แล้วบันทึกเลขเล่ม เลขที่ และจำนวนเงิน', route: 'payments', button: 'รับชำระเงิน' },
             { text: 'ยื่นคำขอลดหย่อน ยกเว้น หรือยกเลิกรายการเรียกเก็บ และติดตามผล', route: 'approvals', button: 'คำขออนุมัติ' },
+            { text: 'สิ้นวัน: พิมพ์รายงานรับเงินประจำวัน ตรวจกับเงินและสำเนาใบเสร็จ ให้ผู้เกี่ยวข้องลงนาม แล้วกดปิดยอด', route: 'report-daily', button: 'ปิดยอดประจำวัน' },
+            { text: 'พิมพ์เอกสารแจ้งยอดถึงผู้ปกครอง และรายงานอื่น ๆ', route: 'reports', button: 'รายงาน' },
           ])));
       }
       var stats = [
@@ -241,9 +252,25 @@
           h('div', { class: 'grid-cards' }, (extra ? [extra] : []).concat(stats)),
           card);
       };
-      if (role === 'ADMIN') return page(null);
+      if (role === 'ADMIN') {
+        return App.api('backups.status', {}).then(function (b) {
+          var last = b.last;
+          var stale = !last || daysSince(last.createdAt.slice(0, 10), b.today) > 2;
+          var box = App.statCard('สำรองข้อมูลล่าสุด', last ? App.fmt.datetime(last.createdAt) : 'ยังไม่เคยสำรอง',
+            b.schedule.enabled ? 'สำรองอัตโนมัติทุกวัน ' + b.schedule.hourLabel : 'ยังไม่เปิดการสำรองอัตโนมัติ', stale || !b.schedule.enabled ? 'danger' : 'success');
+          box.classList.add('clickable');
+          box.addEventListener('click', function () { App.go('backups'); });
+          var node = page(box);
+          var alerts = [];
+          if (!b.schedule.enabled) alerts.push(h('div', { class: 'alert alert-warning', text: 'ยังไม่ได้เปิดการสำรองข้อมูลอัตโนมัติ กรุณาเปิดในหน้า "สำรองและกู้คืนข้อมูล"' }));
+          if (b.lastAuto && !b.lastAuto.ok) alerts.push(h('div', { class: 'alert alert-error', text: 'การสำรองข้อมูลอัตโนมัติครั้งล่าสุดไม่สำเร็จ กรุณาตรวจในหน้า "สำรองและกู้คืนข้อมูล"' }));
+          else if (b.schedule.enabled && stale) alerts.push(h('div', { class: 'alert alert-warning', text: 'ไม่มีการสำรองข้อมูลมากกว่า 2 วัน กรุณาตรวจการสำรองอัตโนมัติ' }));
+          if (alerts.length) node.insertBefore(h('div', { class: 'stack', style: { marginBottom: '16px' } }, alerts), node.children[1]);
+          return node;
+        }, function () { return page(null); });
+      }
       // คำขอที่รออนุมัติ และสิ่งที่ต้องตรวจในทะเบียนคุมใบเสร็จ
-      return Promise.all([App.api('approvals.list'), App.api('receipts.books'), App.api('arrears.summary')]).then(function (res) {
+      return Promise.all([App.api('approvals.list'), App.api('receipts.books'), App.api('arrears.summary'), App.api('closings.list', {})]).then(function (res) {
         var label = role === 'DIRECTOR' ? 'คำขอรอพิจารณา' : 'คำขอรออนุมัติ';
         var count = res[0].pendingCount;
         var box = App.statCard(label, count + ' รายการ', count ? 'กดเพื่อดูรายละเอียด' : 'ไม่มีคำขอค้าง', count ? 'danger' : null);
@@ -256,6 +283,11 @@
         }
         if (active && active.low) alerts.push(h('div', { class: 'alert alert-warning', text: 'ใบเสร็จเล่มที่ ' + active.bookNo + ' เหลือ ' + active.remaining + ' ฉบับ กรุณาเตรียมเล่มใหม่' }));
         if (!active && role === 'FINANCE') alerts.push(h('div', { class: 'alert alert-info', text: 'ยังไม่มีเล่มใบเสร็จที่กำลังใช้ ลงทะเบียนและเปิดใช้เล่มก่อนรับเงิน' }));
+        if (res[3].unclosedCount) {
+          alerts.push(h('div', { class: 'alert alert-warning' },
+            h('span', { text: 'มีวันที่รับเงินแล้วแต่ยังไม่ปิดยอด ' + res[3].unclosedCount + ' วัน (30 วันล่าสุด) ' }),
+            App.button('ดูรายงานประจำวัน', 'ghost btn-sm', function () { App.go('report-daily'); })));
+        }
         var ar = res[2].school;
         var arrearsBox = App.statCard('ยอดค้างทั้งหมด', App.fmt.money(ar.totalSatang),
           ar.owingStudents + ' คน' + (ar.overdueSatang ? ' · เลยกำหนด ' + App.fmt.money(ar.overdueSatang) : ''), ar.totalSatang ? 'danger' : 'success');

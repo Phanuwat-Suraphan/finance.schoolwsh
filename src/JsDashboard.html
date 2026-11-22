@@ -1,0 +1,251 @@
+<script>
+/* ==========================================================================
+   JsDashboard — ภาพรวมการเงินของปีการศึกษา (ระยะที่ 7, ข้อกำหนดข้อ 10)
+   - ตัวเลขทั้งหมดคำนวณที่ Server (dashboard.summary) หน้านี้จัดรูปแบบเท่านั้น
+   - กราฟ 1: แท่งความคืบหน้าการรับชำระ (ชำระแล้ว ÷ ยอดเรียกเก็บสุทธิ) รายชั้นหรือรายห้อง
+   - กราฟ 2: สถานะการชำระของนักเรียนในตาราง พร้อมแท่งแบ่งส่วน (ตัวเลขอยู่ในช่องข้างแท่งเสมอ)
+   - ชี้หรือกด Tab ที่แท่งเพื่อดูรายละเอียด ข้อมูลเดียวกันอยู่ในตารางด้วย (ไม่ต้องพึ่งการชี้)
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var button = App.button;
+  var money = App.fmt.money;
+
+  App.state.dashYear = null;
+  App.state.dashGroup = 'grade';
+
+  var STATE_KEYS = ['PAID', 'PARTIAL', 'UNPAID', 'OTHER'];
+  var STATE_LABELS = { PAID: 'ชำระครบ', PARTIAL: 'ชำระบางส่วน', UNPAID: 'ยังไม่ชำระ', OTHER: 'ยกเว้น / ยังไม่มีรายการ' };
+
+  function pctText(paid, net) {
+    if (!(net > 0)) return '–';
+    return (Math.floor(paid * 1000 / net) / 10).toFixed(1) + '%';
+  }
+
+  function share(paid, net) {
+    return net > 0 ? Math.max(0, Math.min(1, paid / net)) : 0;
+  }
+
+  function stateCounts(g) {
+    return { PAID: g.states.PAID, PARTIAL: g.states.PARTIAL, UNPAID: g.states.UNPAID, OTHER: g.states.EXEMPT + g.states.NO_BILL };
+  }
+
+  // ---------------------------------------------------------------- tooltip (ใช้ textContent เสมอ)
+  var tip = null;
+  function tipEl() {
+    if (!tip || !document.body.contains(tip)) {
+      tip = h('div', { class: 'viz-tip hidden', role: 'tooltip' });
+      document.body.appendChild(tip);
+    }
+    return tip;
+  }
+  function showTip(target, lines, x, y) {
+    var el = tipEl();
+    clear(el);
+    lines.forEach(function (l, i) { el.appendChild(h('div', { class: i === 0 ? 'tip-value' : 'tip-label', text: l })); });
+    el.classList.remove('hidden');
+    var r = target.getBoundingClientRect();
+    var left = x === undefined ? r.left + 8 : x + 14;
+    var top = y === undefined ? r.bottom + 6 : y + 14;
+    var w = el.offsetWidth;
+    var hgt = el.offsetHeight;
+    if (left + w > window.innerWidth - 8) left = Math.max(8, window.innerWidth - w - 8);
+    if (top + hgt > window.innerHeight - 8) top = Math.max(8, (y === undefined ? r.top : y) - hgt - 10);
+    el.style.left = left + 'px';
+    el.style.top = top + 'px';
+  }
+  function hideTip() { if (tip) tip.classList.add('hidden'); }
+  function hover(el, linesFn) {
+    el.addEventListener('pointermove', function (e) { showTip(el, linesFn(), e.clientX, e.clientY); });
+    el.addEventListener('pointerleave', hideTip);
+    el.addEventListener('focus', function () { showTip(el, linesFn()); });
+    el.addEventListener('blur', hideTip);
+  }
+
+  // ---------------------------------------------------------------- แท่งความคืบหน้า
+  function meterRow(label, g) {
+    var fill = h('div', { class: 'meter-fill', style: { width: (share(g.paidSatang, g.netSatang) * 100).toFixed(2) + '%' } });
+    var row = h('div', {
+      class: 'meter-row', tabindex: '0',
+      'aria-label': label + ' ชำระแล้ว ' + pctText(g.paidSatang, g.netSatang) + ' ค้าง ' + money(g.outstandingSatang),
+    },
+      h('div', { class: 'meter-name', text: label }),
+      h('div', { class: 'meter-track' }, fill),
+      h('div', { class: 'meter-figure' },
+        h('span', { class: 'strong', text: pctText(g.paidSatang, g.netSatang) }),
+        h('span', { class: 'muted', text: ' · ค้าง ' + formatSatang_(g.outstandingSatang) })));
+    hover(row, function () {
+      return [
+        'ชำระแล้ว ' + money(g.paidSatang) + ' (' + pctText(g.paidSatang, g.netSatang) + ')',
+        label + ' · เรียกเก็บสุทธิ ' + money(g.netSatang),
+        'ค้างชำระ ' + money(g.outstandingSatang) + (g.overdueSatang ? ' (เลยกำหนด ' + money(g.overdueSatang) + ')' : ''),
+        'นักเรียน ' + g.students + ' คน',
+      ];
+    });
+    return row;
+  }
+
+  function segBar(label, g) {
+    var c = stateCounts(g);
+    var total = g.students || 1;
+    var bar = h('div', { class: 'segbar', role: 'img', tabindex: '0',
+      'aria-label': label + ': ' + STATE_KEYS.map(function (k) { return STATE_LABELS[k] + ' ' + c[k] + ' คน'; }).join(', ') });
+    STATE_KEYS.forEach(function (k) {
+      if (!c[k]) return;
+      bar.appendChild(h('span', { class: 'seg-' + k, style: { flexGrow: String(c[k] / total), flexBasis: '0' } }));
+    });
+    hover(bar, function () {
+      return [label + ' · ' + g.students + ' คน'].concat(STATE_KEYS.filter(function (k) { return c[k]; }).map(function (k) {
+        return STATE_LABELS[k] + ' ' + c[k] + ' คน';
+      }));
+    });
+    return bar;
+  }
+
+  function legend() {
+    return h('div', { class: 'viz-legend', 'aria-hidden': 'true' }, STATE_KEYS.map(function (k) {
+      return h('span', null, h('span', { class: 'sw seg-' + k }), STATE_LABELS[k]);
+    }));
+  }
+
+  function groupsOf(data, mode) {
+    var out = [];
+    data.grades.forEach(function (g) {
+      if (g.other) { out.push({ label: 'ไม่มีชั้นเรียนในปีนี้', g: g }); return; }
+      if (mode === 'room') g.rooms.forEach(function (r) { out.push({ label: r.label, g: r }); });
+      else out.push({ label: g.label, g: g });
+    });
+    return out;
+  }
+
+  App.defineRoute('dashboard', {
+    title: 'ภาพรวม (Dashboard)',
+    roles: ['FINANCE', 'DIRECTOR'],
+    menu: { group: 'main', label: 'ภาพรวม (Dashboard)', icon: 'chart', order: 110 },
+    render: function (params) {
+      var year = params.year || App.state.dashYear || App.state.me.school.currentAcademicYear;
+      return Promise.all([App.api('dashboard.summary', { year: year }), App.api('years.list')]).then(function (res) {
+        var data = res[0];
+        var years = res[1];
+        App.state.dashYear = data.year;
+        var t = data.totals;
+        var st = t.states;
+        var yearSel = App.field({ label: 'ปีการศึกษา', type: 'select', value: String(data.year),
+          options: years.map(function (y) { return { value: String(y.year), label: y.label + (y.isCurrent ? ' (ปัจจุบัน)' : '') }; }) });
+        yearSel.input.addEventListener('change', function () { App.go('dashboard', { year: Number(yearSel.input.value) }); });
+        yearSel.wrap.style.flex = '0 1 320px';
+
+        // ---------------------------------------------------------------- แจ้งเตือนสั้น ๆ
+        var alerts = [];
+        if (data.pendingApprovals) {
+          alerts.push(h('div', { class: 'alert alert-info' },
+            h('span', { text: 'มีคำขอรออนุมัติ ' + data.pendingApprovals + ' รายการ ' }),
+            button('ดูคำขอ', 'ghost btn-sm', function () { App.go('approvals'); })));
+        }
+        if (data.unclosedDays) {
+          alerts.push(h('div', { class: 'alert alert-warning' },
+            h('span', { text: 'มีวันที่รับเงินแล้วแต่ยังไม่ปิดยอด ' + data.unclosedDays + ' วัน (30 วันล่าสุด) ' }),
+            button('ดูรายงานประจำวัน', 'ghost btn-sm', function () { App.go('report-daily'); })));
+        }
+
+        // ---------------------------------------------------------------- กราฟความคืบหน้า + สถานะ
+        var mode = App.state.dashGroup;
+        var chartBox = h('div', { class: 'viz' });
+        var statusBox = h('div', { class: 'viz' });
+        var tableBox = h('div');
+        function tab(value, label) {
+          var b = button(label, 'secondary btn-sm', function () { App.state.dashGroup = value; mode = value; drawCharts(); syncTabs(); });
+          b.dataset.value = value;
+          return b;
+        }
+        var tabs = h('div', { class: 'tabs', role: 'group', 'aria-label': 'จัดกลุ่มกราฟ' }, tab('grade', 'แยกตามระดับชั้น'), tab('room', 'แยกตามห้อง'));
+        function syncTabs() {
+          Array.prototype.forEach.call(tabs.children, function (b) { b.setAttribute('aria-pressed', String(b.dataset.value === mode)); });
+        }
+        function drawCharts() {
+          hideTip();
+          var groups = groupsOf(data, mode);
+          clear(chartBox).appendChild(groups.length
+            ? h('div', { class: 'meter-list' }, groups.map(function (x) { return meterRow(x.label, x.g); }))
+            : h('div', { class: 'empty', text: 'ยังไม่มีข้อมูลนักเรียนหรือรายการเรียกเก็บของปีนี้' }));
+          clear(statusBox);
+          statusBox.appendChild(legend());
+          statusBox.appendChild(App.table({
+            rows: groups,
+            columns: [
+              { label: mode === 'room' ? 'ห้อง' : 'ระดับชั้น', render: function (x) { return h('span', { class: 'strong', text: x.label }); } },
+              { label: 'นักเรียน', className: 'num', render: function (x) { return String(x.g.students); } },
+              { label: 'ชำระครบ', className: 'num', render: function (x) { return String(x.g.states.PAID); } },
+              { label: 'บางส่วน', className: 'num', render: function (x) { return String(x.g.states.PARTIAL); } },
+              { label: 'ยังไม่ชำระ', className: 'num', render: function (x) { return h('span', { class: x.g.states.UNPAID ? 'text-danger strong' : 'muted', text: String(x.g.states.UNPAID) }); } },
+              { label: 'ยกเว้น', className: 'num', render: function (x) { return String(x.g.states.EXEMPT); } },
+              { label: 'ยังไม่มีรายการ', className: 'num', render: function (x) { return String(x.g.states.NO_BILL); } },
+              { label: 'สัดส่วน', render: function (x) { return segBar(x.label, x.g); } },
+            ],
+            empty: 'ไม่มีข้อมูล',
+          }));
+          clear(tableBox).appendChild(App.table({
+            rows: groups,
+            columns: [
+              { label: mode === 'room' ? 'ห้อง' : 'ระดับชั้น', render: function (x) { return h('span', { class: 'strong', text: x.label }); } },
+              { label: 'นักเรียน', className: 'num', render: function (x) { return String(x.g.students); } },
+              { label: 'เรียกเก็บสุทธิ', className: 'num', render: function (x) { return formatSatang_(x.g.netSatang); } },
+              { label: 'ชำระแล้ว', className: 'num', render: function (x) { return formatSatang_(x.g.paidSatang); } },
+              { label: 'ร้อยละ', className: 'num', render: function (x) { return pctText(x.g.paidSatang, x.g.netSatang); } },
+              { label: 'ค้างชำระ', className: 'num', render: function (x) { return h('span', { class: x.g.outstandingSatang ? 'text-danger' : 'muted', text: formatSatang_(x.g.outstandingSatang) }); } },
+              { label: 'เลยกำหนด', className: 'num', render: function (x) { return formatSatang_(x.g.overdueSatang); } },
+            ],
+          }));
+        }
+        drawCharts();
+        syncTabs();
+
+        var overall = h('div', { class: 'viz meter-overall' },
+          h('div', { class: 'meter-track', role: 'img', 'aria-label': 'รับชำระแล้ว ' + pctText(t.paidSatang, t.netSatang) + ' ของยอดเรียกเก็บสุทธิ' },
+            h('div', { class: 'meter-fill', style: { width: (share(t.paidSatang, t.netSatang) * 100).toFixed(2) + '%' } })));
+
+        var today = data.todayReceipts;
+        return h('div', null,
+          App.pageHead('ภาพรวมปีการศึกษา ' + data.year, 'ข้อมูล ณ ' + App.fmt.datetime(data.generatedAt) + ' · คำนวณจากรายการเรียกเก็บและการรับเงินจริงทุกครั้ง',
+            [button('รายงาน', 'secondary', function () { App.go('reports'); }, 'printer')]),
+          h('div', { class: 'toolbar filter-bar' }, yearSel.wrap),
+          alerts.length ? h('div', { class: 'stack', style: { marginBottom: '14px' } }, alerts) : null,
+          h('div', { class: 'grid-cards' },
+            App.statCard('จำนวนนักเรียน', t.students + ' คน', 'ปีการศึกษา ' + data.year),
+            App.statCard('ยอดเรียกเก็บทั้งหมด (สุทธิ)', money(t.netSatang), t.grossSatang !== t.netSatang ? 'ก่อนลดหย่อน/ยกเว้น ' + money(t.grossSatang) : 'ไม่มีการลดหย่อน/ยกเว้น'),
+            App.statCard('ยอดรับชำระแล้ว', money(t.paidSatang), pctText(t.paidSatang, t.netSatang) + ' ของยอดเรียกเก็บ', 'success'),
+            App.statCard('ยอดค้างชำระ', money(t.outstandingSatang),
+              (t.overdueSatang ? 'เลยกำหนด ' + money(t.overdueSatang) : 'ไม่มียอดเลยกำหนด') +
+              (data.priorOutstandingSatang ? ' · ค้างจากปีก่อน ' + money(data.priorOutstandingSatang) : ''), t.outstandingSatang ? 'danger' : 'success')),
+          h('div', { class: 'grid-cards', style: { marginTop: '12px' } },
+            App.statCard('ชำระครบ', st.PAID + ' คน', 'ไม่มียอดค้างของปีนี้', 'success'),
+            App.statCard('ชำระบางส่วน', st.PARTIAL + ' คน', 'ชำระแล้วบางส่วน ยังมียอดค้าง'),
+            App.statCard('ยังไม่ชำระ', st.UNPAID + ' คน', 'ยังไม่มีการชำระของปีนี้', st.UNPAID ? 'danger' : ''),
+            App.statCard('ยกเว้น / ยังไม่มีรายการ', (st.EXEMPT + st.NO_BILL) + ' คน', 'ได้รับยกเว้น ' + st.EXEMPT + ' · ยังไม่เรียกเก็บ ' + st.NO_BILL)),
+          h('div', { class: 'stack', style: { marginTop: '14px' } },
+            h('div', { class: 'card' },
+              h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'อัตราการรับชำระ ปีการศึกษา ' + data.year })),
+              h('div', { class: 'card-body' },
+                h('div', { class: 'status-line' },
+                  h('span', { class: 'strong', style: { fontSize: '1.6rem' }, text: pctText(t.paidSatang, t.netSatang) }),
+                  h('span', { class: 'muted', text: 'ชำระแล้ว ' + money(t.paidSatang) + ' จาก ' + money(t.netSatang) })),
+                overall,
+                h('div', { class: 'muted small', style: { marginTop: '8px' },
+                  text: 'รับเงินวันนี้ ' + today.count + ' ใบ รวม ' + money(today.totalSatang) + (today.count ? (today.closed ? ' · ปิดยอดแล้ว' : ' · ยังไม่ปิดยอด') : '') }))),
+            h('div', { class: 'card' },
+              h('div', { class: 'card-head' },
+                h('h2', { class: 'section-title', text: 'ความคืบหน้าการรับชำระ' }), tabs),
+              h('div', { class: 'card-body' },
+                h('p', { class: 'muted small', style: { marginTop: '0' }, text: 'ความยาวแท่ง = ยอดที่ชำระแล้ว ÷ ยอดเรียกเก็บสุทธิของปีนี้ · ชี้หรือกด Tab ที่แถวเพื่อดูตัวเลข' }),
+                chartBox,
+                h('details', { style: { marginTop: '12px' } }, h('summary', { text: 'ดูเป็นตารางตัวเลข' }), tableBox))),
+            h('div', { class: 'card' },
+              h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'สถานะการชำระของนักเรียน' })),
+              h('div', { class: 'card-body' }, statusBox))));
+      });
+    },
+  });
+})();
+</script>

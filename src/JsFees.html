@@ -418,6 +418,9 @@
           actions.push(button('รับชำระเงิน', '', function () { App.go('payments', { studentId: s.studentId }); }, 'cash'));
           if (d.availableFees.length) actions.push(button('เพิ่มรายการเรียกเก็บ', 'secondary', function () { openAddAssessment(d); }, 'plus'));
         }
+        if (t.outstandingSatang > 0 && s.year) {
+          actions.push(button('พิมพ์หนังสือแจ้งยอด', 'secondary', function () { App.go('report-notices', { year: s.year, studentId: s.studentId }); }, 'printer'));
+        }
         var desc = 'เลขประจำตัว ' + s.studentNo + (s.classLabel ? ' · ชั้น ' + s.classLabel + ' ปีการศึกษา ' + s.year : '') + ' · ' + s.statusLabel;
 
         var assessments = App.table({
