@@ -72,6 +72,7 @@ class MockRange {
   }
 
   getValues() {
+    this._sheet._env.stats.getValues++;
     const out = [];
     for (let r = 0; r < this._numRows; r++) {
       const row = [];
@@ -558,7 +559,7 @@ function createEnv(options) {
     fixedNow: null,
     lockContended: false,
     lockHeld: false,
-    stats: { setValues: 0, setValue: 0, flush: 0, lockAcquired: 0, foldersCreated: 0 },
+    stats: { setValues: 0, setValue: 0, flush: 0, lockAcquired: 0, foldersCreated: 0, getValues: 0 },
     driveMeta: new Map(),
     driveRootId: 'ROOT',
     triggers: [],

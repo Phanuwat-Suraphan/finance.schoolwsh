@@ -7799,9 +7799,9 @@ let ISSUED_IDS_ = Object.create(null);
  * อ่านง่าย เรียงตามเวลา และไม่ซ้ำในการทำงานครั้งเดียวกัน
  * (Db.gs ตรวจซ้ำกับข้อมูลในชีตอีกชั้นหนึ่งภายใต้ lock)
  */
-function newId_(prefix) {
+function newId_(prefix, randomLength) {
   for (let i = 0; i < 20; i++) {
-    const id = prefix + '-' + Utilities.formatDate(now_(), APP.TIMEZONE, 'yyyyMMddHHmmss') + '-' + randomHex_(6);
+    const id = prefix + '-' + Utilities.formatDate(now_(), APP.TIMEZONE, 'yyyyMMddHHmmss') + '-' + randomHex_(randomLength || 6);
     if (!ISSUED_IDS_[id]) {
       ISSUED_IDS_[id] = true;
       return id;
@@ -8714,6 +8714,7 @@ function ensureColumnCapacity_(sheet, neededColumns) {
  */
 
 const AUDIT_GENESIS_HASH = 'GENESIS';
+const AUDIT_ID_RANDOM_HEX = 12;
 const AUDIT_REDACTED_VALUE = '[ซ่อน]';
 const AUDIT_ALWAYS_REDACT = Object.freeze([
   'PasswordHash', 'Password', 'NewPassword', 'OldPassword', 'CurrentPassword',
@@ -8771,7 +8772,9 @@ function auditAppend_(entries, actor) {
   const records = entries.map(function (entry) {
     if (!entry || !entry.action) throw appError_(ERROR_CODES.INTERNAL, 'ข้อผิดพลาดของโปรแกรม: ไม่ได้ระบุการกระทำของประวัติ');
     const raw = {
-      LogId: newId_(state.schema.idPrefix),
+      // ประวัติไม่ได้ตรวจรหัสซ้ำกับทุกแถวในชีต (อ่านเฉพาะแถวล่าสุดเพื่อความเร็ว) จึงใช้ส่วนสุ่มยาวกว่า (48 บิต)
+      // ให้โอกาสซ้ำแทบเป็นศูนย์ แม้บันทึกหลายพันรายการภายในวินาทีเดียว
+      LogId: newId_(state.schema.idPrefix, AUDIT_ID_RANDOM_HEX),
       Timestamp: ts,
       UserId: actor.userId,
       Username: actor.username,

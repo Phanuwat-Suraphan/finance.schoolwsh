@@ -118,3 +118,18 @@ test('ค่า Action ต้องอยู่ในรายการที่
   const { g } = setup();
   assert.throws(() => g.withScriptLock_(() => g.auditAppend_([{ action: 'HACK' }], OFFICER)), (e) => e.code === 'VALIDATION');
 });
+
+test('รหัสประวัติการใช้งานไม่ซ้ำ แม้บันทึกหลายพันรายการภายในวินาทีเดียวข้ามหลายการทำงาน', () => {
+  const { h } = setup();
+  for (let run = 0; run < 40; run++) {
+    h.newExecution(); // เริ่มการทำงานใหม่: รายการรหัสที่ออกไปแล้วในหน่วยความจำถูกล้าง
+    h.gas.withScriptLock_(() => {
+      h.gas.auditAppend_(Array.from({ length: 100 }, () => ({ action: 'LOGIN', entity: 'Users', note: 'ทดสอบ' })), OFFICER);
+    });
+  }
+  const rows = (() => { h.newExecution(); return plain(h.gas.dbAll_('AuditLogs')); })();
+  const ids = rows.map((r) => r.LogId);
+  assert.equal(new Set(ids).size, ids.length, 'รหัสต้องไม่ซ้ำ');
+  assert.match(ids[ids.length - 1], /^LOG-20261121100000-[0-9A-F]{12}$/);
+  assert.equal(verify(h).ok, true);
+});

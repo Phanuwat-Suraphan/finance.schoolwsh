@@ -12,6 +12,7 @@
  */
 
 const AUDIT_GENESIS_HASH = 'GENESIS';
+const AUDIT_ID_RANDOM_HEX = 12;
 const AUDIT_REDACTED_VALUE = '[ซ่อน]';
 const AUDIT_ALWAYS_REDACT = Object.freeze([
   'PasswordHash', 'Password', 'NewPassword', 'OldPassword', 'CurrentPassword',
@@ -69,7 +70,9 @@ function auditAppend_(entries, actor) {
   const records = entries.map(function (entry) {
     if (!entry || !entry.action) throw appError_(ERROR_CODES.INTERNAL, 'ข้อผิดพลาดของโปรแกรม: ไม่ได้ระบุการกระทำของประวัติ');
     const raw = {
-      LogId: newId_(state.schema.idPrefix),
+      // ประวัติไม่ได้ตรวจรหัสซ้ำกับทุกแถวในชีต (อ่านเฉพาะแถวล่าสุดเพื่อความเร็ว) จึงใช้ส่วนสุ่มยาวกว่า (48 บิต)
+      // ให้โอกาสซ้ำแทบเป็นศูนย์ แม้บันทึกหลายพันรายการภายในวินาทีเดียว
+      LogId: newId_(state.schema.idPrefix, AUDIT_ID_RANDOM_HEX),
       Timestamp: ts,
       UserId: actor.userId,
       Username: actor.username,

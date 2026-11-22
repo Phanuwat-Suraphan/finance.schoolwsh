@@ -103,9 +103,9 @@ let ISSUED_IDS_ = Object.create(null);
  * อ่านง่าย เรียงตามเวลา และไม่ซ้ำในการทำงานครั้งเดียวกัน
  * (Db.gs ตรวจซ้ำกับข้อมูลในชีตอีกชั้นหนึ่งภายใต้ lock)
  */
-function newId_(prefix) {
+function newId_(prefix, randomLength) {
   for (let i = 0; i < 20; i++) {
-    const id = prefix + '-' + Utilities.formatDate(now_(), APP.TIMEZONE, 'yyyyMMddHHmmss') + '-' + randomHex_(6);
+    const id = prefix + '-' + Utilities.formatDate(now_(), APP.TIMEZONE, 'yyyyMMddHHmmss') + '-' + randomHex_(randomLength || 6);
     if (!ISSUED_IDS_[id]) {
       ISSUED_IDS_[id] = true;
       return id;
