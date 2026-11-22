@@ -82,6 +82,8 @@ const EXPECTED = {
   'backups.setSchedule': ['ADMIN'],
   'backups.restorePreview': ['ADMIN'],
   'backups.restore': ['ADMIN'],
+  'integrity.check': ['ADMIN', 'DIRECTOR'],
+  'integrity.status': ['ADMIN', 'DIRECTOR'],
 };
 const PUBLIC = ['auth.login', 'auth.loginGoogle'];
 

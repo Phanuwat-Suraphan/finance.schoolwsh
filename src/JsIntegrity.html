@@ -1,0 +1,90 @@
+<script>
+/* ==========================================================================
+   JsIntegrity — ตรวจความถูกต้องของข้อมูล (ระยะที่ 8) ผู้ดูแลระบบและผู้อำนวยการ
+   - Server ตรวจทุกข้อภายใต้ lock อ่านอย่างเดียว และบันทึกประวัติการตรวจ
+   - ระบบตรวจอัตโนมัติทุกวันต่อจากการสำรองข้อมูลด้วย หน้านี้แสดงผลครั้งล่าสุดและตรวจซ้ำได้ทันที
+   ========================================================================== */
+(function () {
+  'use strict';
+  var h = App.h;
+  var clear = App.clear;
+  var button = App.button;
+
+  var CHECK_HELP = {
+    sheets: 'อ่านทุกชีตได้ ตัวเลขและวันที่อยู่ในรูปแบบที่ถูกต้อง และรหัสอ้างอิงไม่ซ้ำ',
+    audit: 'ประวัติการใช้งานต่อกันเป็นลูกโซ่ hash ถ้ามีการแก้ แทรก หรือลบแถว ลูกโซ่จะขาด',
+    payments: 'ใบเสร็จที่มีผลทุกใบ ยอดเงินเท่ากับผลรวมการตัดชำระ และตรงกับทะเบียนคุมเลขที่',
+    receipts: 'ไม่มีเลขที่ใบเสร็จซ้ำ และทุกเลขที่อยู่ในช่วงของเล่ม',
+    assessments: 'ไม่มีรายการเรียกเก็บที่รับเงินเกินยอดสุทธิ หรือรายการที่ยกเลิกแล้วยังมีการตัดชำระ',
+    books: 'สถานะเล่มตรงกับจำนวนเลขที่ที่ใช้ และมีเล่มที่กำลังใช้ไม่เกิน 1 เล่ม',
+    auditCoverage: 'ทุกรายการการเงินบันทึกผ่านระบบ (มีประวัติคู่กัน) ไม่ได้เพิ่มหรือแก้ในชีตโดยตรง',
+    closings: 'รายการรับเงินของวันที่ปิดยอดแล้วยังตรงกับรหัสตรวจสอบบนรายงานที่ลงนาม',
+  };
+
+  function resultView(r) {
+    return h('div', { class: 'stack' },
+      h('div', { class: 'alert ' + (r.ok ? 'alert-success' : 'alert-error') },
+        h('div', { class: 'strong', text: r.ok ? 'ถูกต้องทั้งหมด ' + r.checks.length + ' ข้อ' : 'พบปัญหา ' + r.problemCount + ' จุด' }),
+        h('div', { class: 'small', text: 'ตรวจเมื่อ ' + App.fmt.datetime(r.checkedAt) + (r.checkedBy ? ' โดย ' + r.checkedBy : '') })),
+      h('div', { class: 'card' }, h('div', { class: 'card-body' }, App.table({
+        rows: r.checks,
+        columns: [
+          { label: 'ผล', className: 'nowrap', render: function (c) { return App.badge(c.ok ? '✓ ผ่าน' : '✗ ' + c.count + ' จุด', c.ok ? 'success' : 'danger'); } },
+          { label: 'รายการตรวจ', render: function (c) {
+            var nodes = [h('div', { class: 'strong', text: c.label }), h('div', { class: 'muted small', text: CHECK_HELP[c.key] || '' })];
+            if (!c.ok) {
+              nodes.push(h('ul', { class: 'small', style: { margin: '6px 0 0', paddingLeft: '18px' } },
+                c.problems.map(function (p) { return h('li', { text: p }); }),
+                c.more ? h('li', { class: 'muted', text: 'และอีก ' + c.more + ' จุด' }) : null));
+            }
+            return nodes;
+          } },
+        ],
+      }))));
+  }
+
+  App.defineRoute('integrity', {
+    title: 'ตรวจความถูกต้องของข้อมูล',
+    roles: ['ADMIN', 'DIRECTOR'],
+    menu: { group: 'manage', label: 'ตรวจความถูกต้องของข้อมูล', icon: 'shield', order: 105 },
+    render: function () {
+      return App.api('integrity.status', {}).then(function (st) {
+        var last = st.last;
+        var box = h('div');
+        var runBtn = button('ตรวจตอนนี้', '', function () {
+          runBtn.disabled = true;
+          runBtn.textContent = 'กำลังตรวจ… (อาจใช้เวลา 1 นาที)';
+          App.api('integrity.check', {}).then(function (r) {
+            clear(box).appendChild(resultView(r));
+            App.toast(r.ok ? 'ตรวจแล้ว ถูกต้องทั้งหมด' : 'ตรวจแล้ว พบปัญหา ' + r.problemCount + ' จุด', r.ok ? 'success' : 'error');
+          }).catch(App.fail).then(function () {
+            runBtn.disabled = false;
+            runBtn.textContent = 'ตรวจตอนนี้';
+          });
+        }, 'shield');
+        if (last) {
+          box.appendChild(h('div', { class: 'alert ' + (last.ok ? 'alert-success' : 'alert-error') },
+            h('div', { class: 'strong', text: 'ผลการตรวจครั้งล่าสุด: ' + (last.ok ? 'ถูกต้องทั้งหมด' : 'พบปัญหา ' + last.problemCount + ' จุด') }),
+            h('div', { class: 'small', text: App.fmt.datetime(last.at) + ' โดย ' + (last.byName || last.by) + (last.ok ? '' : ' · กด "ตรวจตอนนี้" เพื่อดูรายละเอียด') })));
+        } else {
+          box.appendChild(h('div', { class: 'alert alert-info', text: 'ยังไม่เคยตรวจ กด "ตรวจตอนนี้" (ระบบจะตรวจให้อัตโนมัติทุกวันต่อจากการสำรองข้อมูล)' }));
+        }
+        return h('div', { class: 'has-print-head' },
+          h('div', { class: 'print-only print-head' },
+            h('div', { class: 'strong', text: App.state.me.school.name }),
+            h('h1', { text: 'ผลการตรวจความถูกต้องของข้อมูล' })),
+          App.pageHead('ตรวจความถูกต้องของข้อมูล', 'ตรวจทั้งระบบโดยไม่แก้ไขข้อมูล: ยอดเงิน เลขที่ใบเสร็จ สถานะเล่ม ประวัติการใช้งาน และวันที่ปิดยอดแล้ว',
+            [runBtn, button('พิมพ์', 'secondary', function () { window.print(); }, 'printer')]),
+          box,
+          h('div', { class: 'card', style: { marginTop: '14px' } },
+            h('div', { class: 'card-head' }, h('h2', { class: 'section-title', text: 'ถ้าพบปัญหา' })),
+            h('div', { class: 'card-body' }, h('ol', { style: { margin: '0', paddingLeft: '20px', lineHeight: '1.8' } },
+              h('li', { text: 'ห้ามแก้ข้อมูลในชีตเองเพื่อให้ "ผ่าน" เพราะจะทำให้ตรวจสอบย้อนหลังไม่ได้' }),
+              h('li', { text: 'แจ้งผู้อำนวยการและเจ้าหน้าที่การเงิน ใช้เลขที่ใบเสร็จหรือรหัสในรายการปัญหาเปิดดูในระบบ และดูหน้า "ประวัติการใช้งาน" ว่าใครทำอะไรเมื่อไร' }),
+              h('li', { text: 'เทียบกับเล่มใบเสร็จจริงและรายงานที่ลงนามแล้ว ถ้าข้อมูลในชีตถูกแก้โดยไม่ผ่านระบบ ให้ผู้ดูแลระบบพิจารณากู้คืนจากไฟล์สำรองก่อนวันที่เกิดปัญหา' }),
+              h('li', { text: 'ถ้าไม่แน่ใจ ให้ปรึกษาผู้พัฒนาระบบพร้อมภาพหน้าจอนี้' })))));
+      });
+    },
+  });
+})();
+</script>

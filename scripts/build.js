@@ -20,7 +20,7 @@ const OUT_FILE = path.join(ROOT, 'dist', 'Code.gs');
  */
 const ORDER = ['Setup.js', 'Code.js', 'Api.js', 'Auth.js', 'Users.js', 'Settings.js', 'Students.js', 'StudentImport.js',
   'Ledger.js', 'Fees.js', 'Approvals.js', 'Receipts.js', 'Payments.js', 'Arrears.js',
-  'Closings.js', 'Reports.js', 'Dashboard.js', 'Backup.js',
+  'Closings.js', 'Reports.js', 'Dashboard.js', 'Backup.js', 'Integrity.js',
   'Config.js', 'Shared.js', 'Utils.js', 'Db.js', 'Audit.js'];
 
 function readAppInfo() {

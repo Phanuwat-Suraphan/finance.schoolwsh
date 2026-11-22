@@ -11,7 +11,7 @@
  */
 
 /** ไฟล์หน้าจอแยกตามโมดูล (เพิ่มชื่อไฟล์ที่นี่เมื่อมีโมดูลใหม่) */
-const VIEW_FILES_ = ['JsViews', 'JsStudents', 'JsFees', 'JsPayments', 'JsApprovals', 'JsArrears', 'JsDashboard', 'JsReports', 'JsBackup'];
+const VIEW_FILES_ = ['JsViews', 'JsStudents', 'JsFees', 'JsPayments', 'JsApprovals', 'JsArrears', 'JsDashboard', 'JsReports', 'JsBackup', 'JsIntegrity'];
 
 function doGet() {
   return HtmlService.createHtmlOutput(renderAppHtml_())

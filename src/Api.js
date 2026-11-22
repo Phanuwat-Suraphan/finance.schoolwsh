@@ -119,6 +119,9 @@ function apiActions_() {
     'backups.setSchedule': { roles: ADMIN, write: true, handler: backupsSetSchedule_ },
     'backups.restorePreview': { roles: ADMIN, write: false, handler: backupsRestorePreview_ },
     'backups.restore': { roles: ADMIN, write: true, handler: backupsRestore_ },
+    // ตรวจความถูกต้องของข้อมูล (ตรวจภายใต้ lock และบันทึกประวัติ)
+    'integrity.check': { roles: OVERSIGHT, write: true, handler: integrityCheck_ },
+    'integrity.status': { roles: OVERSIGHT, write: false, handler: integrityStatus_ },
   };
   Object.keys(API_ACTIONS_).forEach(function (k) { Object.freeze(API_ACTIONS_[k]); });
   Object.freeze(API_ACTIONS_);

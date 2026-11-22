@@ -203,6 +203,12 @@
     }));
   }
 
+  function integrityAlert(last) {
+    return h('div', { class: 'alert alert-error' },
+      h('span', { text: 'การตรวจความถูกต้องของข้อมูลเมื่อ ' + App.fmt.datetime(last.at) + ' พบปัญหา ' + last.problemCount + ' จุด ' }),
+      App.button('ดูรายละเอียด', 'ghost btn-sm', function () { App.go('integrity'); }));
+  }
+
   function daysSince(fromIso, toIso) {
     var a = fromIso.split('-').map(Number);
     var b = toIso.split('-').map(Number);
@@ -226,6 +232,7 @@
             { text: 'ตรวจปีการศึกษาปัจจุบัน', route: 'years' },
             { text: 'ดูประวัติการใช้งาน และตรวจความถูกต้องของประวัติ', route: 'audit' },
             { text: 'สำรองข้อมูล และตรวจว่าเปิดการสำรองอัตโนมัติรายวันไว้แล้ว', help: 'ไฟล์สำรองอยู่ใน Google Drive ของบัญชีเจ้าของระบบ กู้คืนได้จากหน้านี้', route: 'backups', button: 'สำรองข้อมูล' },
+            { text: 'ตรวจความถูกต้องของข้อมูลทั้งระบบ (ระบบตรวจให้อัตโนมัติทุกวันด้วย)', route: 'integrity', button: 'ตรวจความถูกต้อง' },
           ])));
       } else if (role === 'DIRECTOR') {
         card = h('div', { class: 'card' },
@@ -238,6 +245,7 @@
             { text: 'ดูอัตราเงินบำรุง ยอดเรียกเก็บ และยอดค้างของแต่ละชั้น', route: 'fees' },
             { text: 'ดูทะเบียนเล่มใบเสร็จ และเลขที่ที่ใช้ไป', route: 'receipt-books' },
             { text: 'ดูประวัติการใช้งานของทุกบัญชี และตรวจว่าประวัติไม่ถูกแก้ไข', route: 'audit' },
+            { text: 'ตรวจความถูกต้องของข้อมูลทั้งระบบ: ยอดเงิน เลขที่ใบเสร็จ และวันที่ปิดยอดแล้ว', route: 'integrity', button: 'ตรวจความถูกต้อง' },
           ])));
       } else {
         card = h('div', { class: 'card' },
@@ -264,7 +272,9 @@
           card);
       };
       if (role === 'ADMIN') {
-        return App.api('backups.status', {}).then(function (b) {
+        return Promise.all([App.api('backups.status', {}), App.api('integrity.status', {})]).then(function (res) {
+          var b = res[0];
+          var integrity = res[1].last;
           var last = b.last;
           var stale = !last || daysSince(last.createdAt.slice(0, 10), b.today) > 2;
           var box = App.statCard('สำรองข้อมูลล่าสุด', last ? App.fmt.datetime(last.createdAt) : 'ยังไม่เคยสำรอง',
@@ -274,6 +284,7 @@
           var node = page(box);
           var alerts = [];
           if (!b.schedule.enabled) alerts.push(h('div', { class: 'alert alert-warning', text: 'ยังไม่ได้เปิดการสำรองข้อมูลอัตโนมัติ กรุณาเปิดในหน้า "สำรองและกู้คืนข้อมูล"' }));
+          if (integrity && !integrity.ok) alerts.push(integrityAlert(integrity));
           if (b.lastAuto && !b.lastAuto.ok) alerts.push(h('div', { class: 'alert alert-error', text: 'การสำรองข้อมูลอัตโนมัติครั้งล่าสุดไม่สำเร็จ กรุณาตรวจในหน้า "สำรองและกู้คืนข้อมูล"' }));
           else if (b.schedule.enabled && stale) alerts.push(h('div', { class: 'alert alert-warning', text: 'ไม่มีการสำรองข้อมูลมากกว่า 2 วัน กรุณาตรวจการสำรองอัตโนมัติ' }));
           if (alerts.length) node.insertBefore(h('div', { class: 'stack', style: { marginBottom: '16px' } }, alerts), node.children[1]);
@@ -281,7 +292,8 @@
         }, function () { return page(null); });
       }
       // คำขอที่รออนุมัติ และสิ่งที่ต้องตรวจในทะเบียนคุมใบเสร็จ
-      return Promise.all([App.api('approvals.list'), App.api('receipts.books'), App.api('arrears.summary'), App.api('closings.list', {})]).then(function (res) {
+      return Promise.all([App.api('approvals.list'), App.api('receipts.books'), App.api('arrears.summary'), App.api('closings.list', {}),
+        role === 'DIRECTOR' ? App.api('integrity.status', {}) : Promise.resolve(null)]).then(function (res) {
         var label = role === 'DIRECTOR' ? 'คำขอรอพิจารณา' : 'คำขอรออนุมัติ';
         var count = res[0].pendingCount;
         var box = App.statCard(label, count + ' รายการ', count ? 'กดเพื่อดูรายละเอียด' : 'ไม่มีคำขอค้าง', count ? 'danger' : null);
@@ -294,6 +306,7 @@
         }
         if (active && active.low) alerts.push(h('div', { class: 'alert alert-warning', text: 'ใบเสร็จเล่มที่ ' + active.bookNo + ' เหลือ ' + active.remaining + ' ฉบับ กรุณาเตรียมเล่มใหม่' }));
         if (!active && role === 'FINANCE') alerts.push(h('div', { class: 'alert alert-info', text: 'ยังไม่มีเล่มใบเสร็จที่กำลังใช้ ลงทะเบียนและเปิดใช้เล่มก่อนรับเงิน' }));
+        if (res[4] && res[4].last && !res[4].last.ok) alerts.unshift(integrityAlert(res[4].last));
         if (res[3].unclosedCount) {
           alerts.push(h('div', { class: 'alert alert-warning' },
             h('span', { text: 'มีวันที่รับเงินแล้วแต่ยังไม่ปิดยอด ' + res[3].unclosedCount + ' วัน (30 วันล่าสุด) ' }),

@@ -396,6 +396,17 @@ function dailyBackup(e) {
     throw err;
   }
   PropertiesService.getScriptProperties().setProperty(PROP_KEYS.BACKUP_LAST_AUTO, JSON.stringify(result));
+  // ตรวจความถูกต้องของข้อมูลทุกวัน ถ้าพบปัญหา ให้ทริกเกอร์จบแบบผิดพลาด เพื่อให้ Google ส่งอีเมลแจ้งเจ้าของระบบ
+  const integrity = withScriptLock_(function () {
+    const r = integrityRun_();
+    integrityRecord_(r, ACTORS.SYSTEM);
+    return r;
+  }, LIMITS.SETUP_LOCK_TIMEOUT_MS);
+  result.integrityOk = integrity.ok;
+  if (!integrity.ok) {
+    throw appError_(ERROR_CODES.INTERNAL, 'สำรองข้อมูลสำเร็จ แต่ตรวจพบปัญหาความถูกต้องของข้อมูล ' + integrity.problemCount +
+      ' จุด กรุณาเปิดหน้า "ตรวจความถูกต้องของข้อมูล" ในระบบ');
+  }
   return result;
 }
 

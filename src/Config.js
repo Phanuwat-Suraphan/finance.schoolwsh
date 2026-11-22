@@ -42,6 +42,7 @@ const PROP_KEYS = Object.freeze({
   BACKUP_LAST: 'BACKUP_LAST',             // ไฟล์สำรองล่าสุดที่สำเร็จ (JSON: ไม่มีข้อมูลลับ)
   BACKUP_LAST_AUTO: 'BACKUP_LAST_AUTO',   // ผลการสำรองอัตโนมัติครั้งล่าสุด (JSON)
   SESSION_EPOCH: 'SESSION_EPOCH',         // เปลี่ยนค่าเมื่อกู้คืนข้อมูล เพื่อให้ทุกคนเข้าสู่ระบบใหม่
+  INTEGRITY_LAST: 'INTEGRITY_LAST',       // ผลการตรวจความถูกต้องของข้อมูลครั้งล่าสุด (JSON ไม่มีข้อมูลลับ)
   AUDIT_HEAD: 'AUDIT_HEAD',               // ตำแหน่งและ hash ล่าสุดของ AuditLogs ใช้ตรวจการลบแถวท้ายชีต
   PASSWORD_HASH_ITERATIONS: 'PASSWORD_HASH_ITERATIONS', // จำนวนรอบแฮชรหัสผ่าน (ปรับตามความเร็วของเครื่อง Google ตอนติดตั้ง)
 });
