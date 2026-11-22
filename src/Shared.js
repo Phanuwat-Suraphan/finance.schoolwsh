@@ -192,6 +192,18 @@ function fiscalYearOfDate_(iso) {
   return Number(m[2]) >= 10 ? be + 1 : be;
 }
 
+/** ช่วงวันที่ของปีงบประมาณ (พ.ศ.) เช่น 2570 → 1 ต.ค. 2569 ถึง 30 ก.ย. 2570 (คืนค่าเป็นวันที่ ค.ศ.) */
+function fiscalYearRange_(fiscalYear) {
+  var ce = Number(fiscalYear) - 543;
+  return { from: (ce - 1) + '-10-01', to: ce + '-09-30' };
+}
+
+/** ช่วงวันที่ของปีการศึกษา: ใช้วันที่ที่ตั้งไว้ ถ้าไม่มีใช้ 1 พ.ค. ถึง 30 เม.ย. ปีถัดไป (สอดคล้องกับ academicYearOfDate_) */
+function academicYearRange_(year, startDate, endDate) {
+  var ce = Number(year) - 543;
+  return { from: startDate || ce + '-05-01', to: endDate || (ce + 1) + '-04-30' };
+}
+
 /**
  * แยกข้อความ CSV/TSV เป็นตาราง (array ของแถว)
  * รองรับเครื่องหมายคำพูด การขึ้นบรรทัดใหม่ในช่อง BOM และเลือกตัวคั่นอัตโนมัติ (แท็บ จุลภาค หรืออัฒภาค)
@@ -399,6 +411,8 @@ const SHARED_CLIENT_FUNCTIONS_ = [
   'feeItemLabel_',
   'payStateOf_',
   'autoAllocate_',
+  'fiscalYearRange_',
+  'academicYearRange_',
 ];
 
 /** ซอร์สโค้ดของฟังก์ชันที่ใช้ร่วมกัน สำหรับฝังลงในหน้าเว็บ (ระยะที่ 2) */
@@ -424,6 +438,8 @@ function sharedClientSource_() {
     feeItemLabel_: feeItemLabel_,
     payStateOf_: payStateOf_,
     autoAllocate_: autoAllocate_,
+    fiscalYearRange_: fiscalYearRange_,
+    academicYearRange_: academicYearRange_,
   };
   return SHARED_CLIENT_FUNCTIONS_.map(function (name) { return String(fns[name]); }).join('\n\n');
 }

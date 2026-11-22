@@ -26,7 +26,7 @@ test('มีครบ 12 ชีตตามข้อกำหนด และอ
     'PaymentAllocations', 'ReceiptBooks', 'ReceiptEntries', 'ReceiptCancellations', 'AuditLogs', 'SchoolSettings'];
   required.forEach((name) => assert.ok(SHEET_ORDER.includes(name), 'ขาดชีต ' + name));
   ['Enrollments', 'FeeAdjustments', 'ApprovalRequests'].forEach((name) => assert.ok(SHEET_ORDER.includes(name)));
-  assert.equal(SHEET_ORDER.length, 15);
+  assert.equal(SHEET_ORDER.length, 16);
   assert.deepEqual([...Object.keys(SCHEMA)].sort(), [...SHEET_ORDER].sort());
 });
 
@@ -131,8 +131,12 @@ test('appsscript.json: เขตเวลาไทย, V8 และสิทธ�
   assert.equal(manifest.timeZone, 'Asia/Bangkok');
   assert.equal(manifest.runtimeVersion, 'V8');
   assert.equal(manifest.webapp.executeAs, 'USER_DEPLOYING', 'ต้องทำงานในนามเจ้าของระบบ ไม่ใช่ผู้ใช้');
+  // drive: สร้างสำเนาสำรองและย้ายไปถังขยะตามรอบเก็บ (DriveApp ในตัว ไม่ใช่ Drive API ภายนอก)
+  // script.scriptapp: เปิด/ปิดการสำรองอัตโนมัติรายวันจากหน้าเว็บ (ScriptApp trigger)
   assert.deepEqual(manifest.oauthScopes.sort(), [
+    'https://www.googleapis.com/auth/drive',
     'https://www.googleapis.com/auth/script.container.ui',
+    'https://www.googleapis.com/auth/script.scriptapp',
     'https://www.googleapis.com/auth/spreadsheets',
     'https://www.googleapis.com/auth/userinfo.email',
   ]);

@@ -26,8 +26,8 @@ const APP = Object.freeze({
   NAME: 'ระบบบริหารจัดเก็บเงินบำรุงการศึกษา',
   SCHOOL_NAME: 'โรงเรียนวัดเสาหิน',
   PROVINCE: 'เชียงใหม่',
-  VERSION: '0.6.0',
-  RELEASE: 'ระยะที่ 6: ระบบยอดค้างชำระ',
+  VERSION: '0.7.0',
+  RELEASE: 'ระยะที่ 7: Dashboard รายงาน และการสำรองข้อมูล',
   SCHEMA_VERSION: 1,
   TIMEZONE: 'Asia/Bangkok',
 });
@@ -37,7 +37,7 @@ const PROP_KEYS = Object.freeze({
   DB_SPREADSHEET_ID: 'DB_SPREADSHEET_ID', // รหัสไฟล์ Google Sheets ที่ใช้เป็นฐานข้อมูล
   AUTH_MODE: 'AUTH_MODE',                 // PASSWORD หรือ GOOGLE
   PASSWORD_PEPPER: 'PASSWORD_PEPPER',     // ค่าลับสำหรับแฮชรหัสผ่าน ห้ามแก้หรือลบ
-  BACKUP_FOLDER_ID: 'BACKUP_FOLDER_ID',   // โฟลเดอร์สำรองข้อมูล (ระยะที่ 7)
+  BACKUP_FOLDER_ID: 'BACKUP_FOLDER_ID',   // โฟลเดอร์สำรองข้อมูลใน Google Drive ของเจ้าของระบบ
   AUDIT_HEAD: 'AUDIT_HEAD',               // ตำแหน่งและ hash ล่าสุดของ AuditLogs ใช้ตรวจการลบแถวท้ายชีต
   PASSWORD_HASH_ITERATIONS: 'PASSWORD_HASH_ITERATIONS', // จำนวนรอบแฮชรหัสผ่าน (ปรับตามความเร็วของเครื่อง Google ตอนติดตั้ง)
 });
@@ -109,6 +109,7 @@ const STATUS = Object.freeze({
     PAYMENT_CORRECTION: 'PAYMENT_CORRECTION',
     BOOK_CLOSE: 'BOOK_CLOSE',
   }),
+  CLOSING: Object.freeze({ CLOSED: 'CLOSED', REOPENED: 'REOPENED' }),
   // สถานะการชำระของรายการเรียกเก็บ: ระบบคำนวณจากข้อมูลทุกครั้ง ไม่ได้เก็บไว้ในชีต
   PAY_STATE: Object.freeze({ UNPAID: 'UNPAID', PARTIAL: 'PARTIAL', PAID: 'PAID', EXEMPT: 'EXEMPT', CANCELLED: 'CANCELLED' }),
 });
@@ -136,6 +137,7 @@ const STATUS_LABELS = Object.freeze({
     BOOK_CLOSE: 'ปิดเล่มใบเสร็จก่อนใช้ครบเล่ม',
   },
   PAY_STATE: { UNPAID: 'ยังไม่ชำระ', PARTIAL: 'ชำระบางส่วน', PAID: 'ชำระครบ', EXEMPT: 'ได้รับยกเว้น', CANCELLED: 'ยกเลิก' },
+  CLOSING: { CLOSED: 'ปิดยอดแล้ว', REOPENED: 'เปิดยอดใหม่' },
 });
 
 /** การกระทำที่บันทึกใน AuditLogs */
@@ -158,6 +160,8 @@ const AUDIT_ACTIONS = Object.freeze({
   INTEGRITY_CHECK: 'INTEGRITY_CHECK',
   ACCESS_DENIED: 'ACCESS_DENIED',
   PROMOTE: 'PROMOTE',
+  DAY_CLOSE: 'DAY_CLOSE',
+  DAY_REOPEN: 'DAY_REOPEN',
 });
 
 const AUDIT_ACTION_LABELS = Object.freeze({
@@ -179,6 +183,8 @@ const AUDIT_ACTION_LABELS = Object.freeze({
   INTEGRITY_CHECK: 'ตรวจความถูกต้อง',
   ACCESS_DENIED: 'ถูกปฏิเสธสิทธิ์',
   PROMOTE: 'เลื่อนชั้น',
+  DAY_CLOSE: 'ปิดยอดประจำวัน',
+  DAY_REOPEN: 'เปิดยอดประจำวันใหม่',
 });
 
 const SHEETS = Object.freeze({
@@ -197,6 +203,7 @@ const SHEETS = Object.freeze({
   RECEIPT_CANCELLATIONS: 'ReceiptCancellations',
   APPROVAL_REQUESTS: 'ApprovalRequests',
   AUDIT_LOGS: 'AuditLogs',
+  DAILY_CLOSINGS: 'DailyClosings',
 });
 
 /** ลำดับแท็บชีตเมื่อสร้างใหม่ */
@@ -216,6 +223,7 @@ const SHEET_ORDER = Object.freeze([
   SHEETS.RECEIPT_CANCELLATIONS,
   SHEETS.APPROVAL_REQUESTS,
   SHEETS.AUDIT_LOGS,
+  SHEETS.DAILY_CLOSINGS,
 ]);
 
 const TAB_COLORS = Object.freeze({
@@ -578,6 +586,28 @@ const SCHEMA = Object.freeze({
     mutable: ['Status', 'DecidedBy', 'DecidedAt', 'DecisionNote'],
   },
 
+  [SHEETS.DAILY_CLOSINGS]: {
+    label: 'การปิดยอดประจำวัน',
+    idPrefix: 'CLS',
+    tabColor: TAB_COLORS.FEE,
+    columns: [
+      ['ClosingId', 'id', 'รหัสการปิดยอด (ระบบสร้างอัตโนมัติ) ผู้ปิดยอด = CreatedBy เวลาที่ปิดยอด = CreatedAt'],
+      ['ClosingDate', 'date', 'วันที่รับเงินที่ปิดยอด'],
+      ['Status', 'enum', 'CLOSED ปิดยอดแล้ว / REOPENED เปิดยอดใหม่ (ผู้อำนวยการ)', STATUS.CLOSING],
+      ['ReceiptCount', 'int', 'จำนวนใบเสร็จที่มีผล ณ เวลาปิดยอด'],
+      ['TotalAmount', 'money', 'ยอดรับเงินรวม ณ เวลาปิดยอด (บาท)'],
+      ['ByChannelJson', 'json', 'ยอดแยกตามช่องทาง'],
+      ['ReceiptRange', 'text', 'เล่มและเลขที่ใบเสร็จที่ใช้ในวันนั้น'],
+      ['Digest', 'text', 'รหัสตรวจสอบของรายการรับเงินในวันนั้น (พิมพ์ไว้ในรายงานที่ลงนาม)'],
+      ['AuditHash', 'text', 'hash ล่าสุดของประวัติการใช้งานขณะปิดยอด'],
+      ['ReopenedAt', 'datetime', 'วันเวลาที่เปิดยอดใหม่'],
+      ['ReopenedBy', 'text', 'ผู้เปิดยอดใหม่'],
+      ['ReopenReason', 'text', 'เหตุผลการเปิดยอดใหม่'],
+    ].concat(STD_CREATED_COLUMNS_, STD_UPDATED_COLUMNS_),
+    unique: [{ cols: ['ClosingDate'], skipStatus: [STATUS.CLOSING.REOPENED], message: 'วันนี้ปิดยอดแล้ว' }],
+    mutable: ['Status', 'ReopenedAt', 'ReopenedBy', 'ReopenReason'],
+  },
+
   [SHEETS.AUDIT_LOGS]: {
     label: 'ประวัติการใช้งาน',
     idPrefix: 'LOG',
@@ -623,6 +653,7 @@ const SETTINGS_DEFS = Object.freeze([
   { key: 'SCHOOL_NAME', group: 'school', label: 'ชื่อโรงเรียน', type: 'text', defaultValue: 'โรงเรียนวัดเสาหิน', description: 'ใช้ในหัวเอกสารและหน้าเข้าสู่ระบบ' },
   { key: 'SCHOOL_ADDRESS', group: 'school', label: 'ที่อยู่โรงเรียน', type: 'text', defaultValue: '', description: 'ใช้ในหัวเอกสาร' },
   { key: 'SCHOOL_PROVINCE', group: 'school', label: 'จังหวัด', type: 'text', defaultValue: 'เชียงใหม่', description: 'ใช้ในหัวเอกสาร' },
+  { key: 'SCHOOL_PHONE', group: 'school', label: 'เบอร์โทรศัพท์ติดต่อ', type: 'text', defaultValue: '', description: 'ใช้ในหนังสือแจ้งยอดถึงผู้ปกครอง' },
   { key: 'SCHOOL_AFFILIATION', group: 'school', label: 'หน่วยงานต้นสังกัด', type: 'text', defaultValue: '', description: 'กรอกตามจริง เช่น ชื่อ สพป. ที่โรงเรียนสังกัด' },
   { key: 'DIRECTOR_NAME', group: 'signers', label: 'ชื่อผู้อำนวยการ', type: 'text', defaultValue: '', description: 'ใช้ในช่องลงนามของรายงาน' },
   { key: 'DIRECTOR_POSITION', group: 'signers', label: 'ตำแหน่งผู้อำนวยการ', type: 'text', defaultValue: 'ผู้อำนวยการโรงเรียนวัดเสาหิน', description: 'ใช้ในช่องลงนามของรายงาน' },

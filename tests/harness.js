@@ -9,6 +9,8 @@
  *  - ข้อความที่ขึ้นต้นด้วย = กลายเป็นสูตรเสมอ (อ่านกลับได้ '#FORMULA!') ถ้าไม่มี ' นำหน้า
  *  - เครื่องหมาย ' นำหน้า: โหมด 'consume' ถูกตัดทิ้งเหมือนการพิมพ์ / โหมด 'literal' ถูกเก็บไว้ในเซลล์ Plain text
  *  - อ้างช่วงเซลล์เกินขนาดชีตจะ error เหมือนของจริง
+ *  - DriveApp: folder.getFiles() คืนไฟล์ในถังขยะด้วย (โค้ดต้องตรวจ isTrashed เอง)
+ *  - sheet.copyTo() ตั้งชื่อชีตใหม่เป็น "สำเนาของ ..." เหมือนบัญชีภาษาไทย
  */
 const fs = require('fs');
 const path = require('path');
@@ -148,6 +150,14 @@ class MockRange {
     return this;
   }
 
+  clearContent() {
+    this._each((r, c) => {
+      const cell = this._sheet._peek(r, c);
+      if (cell) { cell.value = ''; cell.formula = false; }
+    });
+    return this;
+  }
+
   setFontWeight(v) { return this._style('fontWeight', v); }
   setFontColor(v) { return this._style('fontColor', v); }
   setBackground(v) { return this._style('background', v); }
@@ -180,7 +190,15 @@ class MockSheet {
   }
 
   getName() { return this._name; }
+  setName(name) {
+    if (this._ss._sheets.some((s) => s !== this && s.getName() === name)) {
+      throw new Error('Exception: A sheet with the name "' + name + '" already exists. Please enter another name.');
+    }
+    this._name = String(name);
+    return this;
+  }
   getParent() { return this._ss; }
+  getSheetId() { return this._ss._sheets.indexOf(this); }
   getMaxRows() { return this._maxRows; }
   getMaxColumns() { return this._maxCols; }
 
@@ -308,6 +326,25 @@ class MockSheet {
 
   getProtections() { return this._protections.slice(); }
 
+  /** คัดลอกทั้งชีต (ค่า รูปแบบ โน้ต) ไปอีกไฟล์ ไม่คัดลอกการป้องกันชีต เหมือนของจริง */
+  copyTo(spreadsheet) {
+    let name = 'สำเนาของ ' + this._name;
+    for (let i = 2; spreadsheet.getSheetByName(name); i++) name = 'สำเนาของ ' + this._name + ' ' + i;
+    const copy = spreadsheet.insertSheet(name);
+    copy._maxRows = this._maxRows;
+    copy._maxCols = this._maxCols;
+    copy._frozenRows = this._frozenRows;
+    copy._tabColor = this._tabColor;
+    copy._grid = this._grid.map((row) => (row ? row.map((cell) => {
+      if (!cell) return cell;
+      const out = Object.assign({}, cell);
+      if (cell.value instanceof Date) out.value = new Date(cell.value.getTime());
+      if (cell.style) out.style = Object.assign({}, cell.style);
+      return out;
+    }) : row));
+    return copy;
+  }
+
   // ---- ตัวช่วยสำหรับชุดทดสอบ (จำลองการแก้ชีตด้วยมือ) ----
   _rawSet(r, c, value) { this._cell(r, c).value = value; this._cell(r, c).formula = false; }
   _swapRows(a, b) {
@@ -326,8 +363,11 @@ class MockSpreadsheet {
     this._name = name || 'ฐานข้อมูลทดสอบ';
     this._sheets = [];
     env.spreadsheets.set(this._id, this);
+    env.driveMeta.set(this._id, { parents: new Set([env.driveRootId]), trashed: false, created: env.nowMs(), description: '' });
     this.insertSheet('Sheet1');
   }
+
+  rename(name) { this._name = String(name); return this; }
 
   getId() { return this._id; }
   getName() { return this._name; }
@@ -346,8 +386,130 @@ class MockSpreadsheet {
   }
 
   deleteSheet(sheet) {
+    if (this._sheets.length <= 1) throw new Error("Exception: You can't remove all the sheets in a document.");
     this._sheets = this._sheets.filter((s) => s !== sheet);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Drive / ScriptApp mock (เฉพาะส่วนที่ระบบใช้: โฟลเดอร์สำรองข้อมูลและตัวตั้งเวลา)
+// ---------------------------------------------------------------------------
+
+const MIME_SHEETS = 'application/vnd.google-apps.spreadsheet';
+const MIME_FOLDER = 'application/vnd.google-apps.folder';
+
+function iteratorOf(items) {
+  let i = 0;
+  return { hasNext: () => i < items.length, next: () => { if (i >= items.length) throw new Error('Exception: No more items'); return items[i++]; } };
+}
+
+function driveNotFound() {
+  return new Error('Exception: No item with the given ID could be found. Possibly because you have not edited this item or you do not have permission to access it.');
+}
+
+function createDrive(env) {
+  const folders = new Map(); // id → { id, name, parents:Set, trashed, created }
+  const folderObj = (id) => {
+    const rec = folders.get(id);
+    if (!rec) throw driveNotFound();
+    const api = {
+      getId: () => rec.id,
+      getName: () => rec.name,
+      setName(n) { rec.name = String(n); return api; },
+      getUrl: () => 'https://drive.google.com/drive/folders/' + rec.id,
+      isTrashed: () => rec.trashed,
+      setTrashed(b) { rec.trashed = !!b; return api; },
+      getDateCreated: () => new Date(rec.created),
+      getParents: () => iteratorOf(Array.from(rec.parents).filter((p) => folders.has(p)).map(folderObj)),
+      getFiles: () => iteratorOf(Array.from(env.spreadsheets.keys()).filter((fid) => env.driveMeta.get(fid).parents.has(rec.id)).map(fileObj)),
+      getFilesByType: (mime) => (mime === MIME_SHEETS ? api.getFiles() : iteratorOf([])),
+      createFolder: (name) => newFolder(name, rec.id),
+    };
+    return api;
+  };
+  const fileObj = (id) => {
+    const ss = env.spreadsheets.get(id);
+    const meta = env.driveMeta.get(id);
+    if (!ss || !meta) throw driveNotFound();
+    const api = {
+      getId: () => id,
+      getName: () => ss.getName(),
+      setName(n) { ss.rename(n); return api; },
+      getMimeType: () => MIME_SHEETS,
+      getUrl: () => ss.getUrl(),
+      getDateCreated: () => new Date(meta.created),
+      getLastUpdated: () => new Date(meta.created),
+      getDescription: () => meta.description,
+      setDescription(d) { meta.description = String(d); return api; },
+      isTrashed: () => meta.trashed,
+      setTrashed(b) { meta.trashed = !!b; return api; },
+      getSize: () => 0,
+      getParents: () => iteratorOf(Array.from(meta.parents).filter((p) => folders.has(p)).map(folderObj)),
+      moveTo(folder) {
+        if (!folders.has(folder.getId())) throw driveNotFound();
+        meta.parents = new Set([folder.getId()]);
+        return api;
+      },
+    };
+    return api;
+  };
+  const newFolder = (name, parentId) => {
+    const id = 'FD' + crypto.randomBytes(8).toString('hex');
+    folders.set(id, { id, name: String(name), parents: new Set([parentId]), trashed: false, created: env.nowMs() });
+    env.stats.foldersCreated++;
+    return folderObj(id);
+  };
+  folders.set(env.driveRootId, { id: env.driveRootId, name: 'My Drive', parents: new Set(), trashed: false, created: 0 });
+  return {
+    folders,
+    DriveApp: {
+      getFileById: (id) => fileObj(String(id)),
+      getFolderById: (id) => folderObj(String(id)),
+      getRootFolder: () => folderObj(env.driveRootId),
+      createFolder: (name) => newFolder(name, env.driveRootId),
+    },
+  };
+}
+
+function createScriptApp(env) {
+  let seq = 4600000;
+  const make = (spec, uid) => ({
+    getHandlerFunction: () => spec.fn,
+    getUniqueId: () => uid,
+    getEventType: () => 'CLOCK',
+    getTriggerSource: () => 'CLOCK',
+    _spec: spec,
+  });
+  return {
+    getProjectTriggers: () => env.triggers.slice(),
+    newTrigger(fn) {
+      const spec = { fn: String(fn), everyDays: null, atHour: null, timezone: null };
+      const timeBased = {
+        everyDays(n) { spec.everyDays = n; return timeBased; },
+        atHour(h) {
+          if (!Number.isInteger(h) || h < 0 || h > 23) throw new Error('Exception: Invalid argument: hour');
+          spec.atHour = h; return timeBased;
+        },
+        nearMinute() { return timeBased; },
+        inTimezone(tz) { spec.timezone = tz; return timeBased; },
+        create() {
+          if (!spec.everyDays || spec.atHour === null) throw new Error('Exception: incomplete clock trigger');
+          if (env.triggers.length >= 20) throw new Error('Exception: This script has too many triggers.');
+          const t = make(spec, String(++seq));
+          env.triggers.push(t);
+          return t;
+        },
+      };
+      return { timeBased: () => timeBased };
+    },
+    deleteTrigger(trigger) {
+      const before = env.triggers.length;
+      env.triggers = env.triggers.filter((t) => t.getUniqueId() !== trigger.getUniqueId());
+      if (env.triggers.length === before) throw new Error('Exception: trigger not found');
+    },
+    EventType: { CLOCK: 'CLOCK' },
+    TriggerSource: { CLOCK: 'CLOCK' },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -394,10 +556,17 @@ function createEnv(options) {
     fixedNow: null,
     lockContended: false,
     lockHeld: false,
-    stats: { setValues: 0, setValue: 0, flush: 0, lockAcquired: 0 },
+    stats: { setValues: 0, setValue: 0, flush: 0, lockAcquired: 0, foldersCreated: 0 },
+    driveMeta: new Map(),
+    driveRootId: 'ROOT',
+    triggers: [],
+    driveFailure: null, // ตั้งเป็นข้อความเพื่อจำลอง Drive ล้มเหลว
   };
 
   const nowMs = () => (env.fixedNow ? env.fixedNow.getTime() : Date.now());
+  env.nowMs = nowMs;
+  const drive = createDrive(env);
+  env.drive = drive;
 
   const ui = {
     ButtonSet: { OK: 'OK', OK_CANCEL: 'OK_CANCEL', YES_NO: 'YES_NO', YES_NO_CANCEL: 'YES_NO_CANCEL' },
@@ -460,6 +629,10 @@ function createEnv(options) {
 
   const globals = {
     SpreadsheetApp: {
+      create(name) {
+        if (env.driveFailure) throw new Error(env.driveFailure);
+        return new MockSpreadsheet(env, name);
+      },
       getActiveSpreadsheet: () => env.activeSpreadsheet,
       getActive: () => env.activeSpreadsheet,
       openById(id) {
@@ -474,6 +647,14 @@ function createEnv(options) {
       },
       ProtectionType: { SHEET: 'SHEET', RANGE: 'RANGE' },
     },
+    DriveApp: new Proxy(drive.DriveApp, {
+      get(target, prop) {
+        if (env.driveFailure && typeof target[prop] === 'function') return () => { throw new Error(env.driveFailure); };
+        return target[prop];
+      },
+    }),
+    ScriptApp: createScriptApp(env),
+    MimeType: { GOOGLE_SHEETS: MIME_SHEETS, FOLDER: MIME_FOLDER },
     LockService: { getScriptLock: () => lock },
     CacheService: { getScriptCache: () => scriptCache },
     PropertiesService: { getScriptProperties: () => scriptProperties },

@@ -38,8 +38,8 @@ test('วางไฟล์รวมไฟล์เดียวแล้วก�
   const h = createEnv({ sources: [{ name: 'Code.gs', code: readBundle() }] });
   h.setNow('2026-11-21T10:00:00+07:00');
   const first = plain(h.gas.SetupDatabase());
-  assert.equal(first.sheets.filter((s) => s.action === 'created').length, 15);
-  assert.match(h.env.logs.map((l) => l.text).join('\n'), /ผลการติดตั้งฐานข้อมูล[\s\S]*สร้างชีตใหม่ 15 ชีต/);
+  assert.equal(first.sheets.filter((s) => s.action === 'created').length, 16);
+  assert.match(h.env.logs.map((l) => l.text).join('\n'), /ผลการติดตั้งฐานข้อมูล[\s\S]*สร้างชีตใหม่ 16 ชีต/);
   h.newExecution();
   const second = plain(h.gas.SetupDatabase());
   assert.equal(second.changed, false);

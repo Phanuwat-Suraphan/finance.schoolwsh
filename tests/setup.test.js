@@ -13,10 +13,10 @@ function freshEnv() {
   return h;
 }
 
-test('ติดตั้งครั้งแรก: สร้าง 15 ชีตพร้อมหัวตารางตามลำดับใน SCHEMA', () => {
+test('ติดตั้งครั้งแรก: สร้าง 16 ชีตพร้อมหัวตารางตามลำดับใน SCHEMA', () => {
   const h = freshEnv();
   const report = plain(h.gas.SetupDatabase());
-  assert.equal(report.sheets.length, 15);
+  assert.equal(report.sheets.length, 16);
   assert.ok(report.sheets.every((s) => s.action === 'created'));
   assert.equal(report.changed, true);
   h.run('SHEET_ORDER').forEach((name) => {
@@ -49,7 +49,7 @@ test('สร้างค่าตั้งค่าเริ่มต้นค�
   h.newExecution();
   const settings = Object.fromEntries(h.gas.dbAll_('SchoolSettings').map((r) => [r.SettingKey, r.Value]));
   assert.equal(Object.keys(settings).length, h.run('SETTINGS_DEFS.length'));
-  assert.equal(Object.keys(settings).length, 23);
+  assert.equal(Object.keys(settings).length, 24);
   assert.equal(settings.RECEIPT_STRICT_SEQUENCE, 'TRUE');
   assert.equal(settings.APPROVAL_BOOK_CLOSE, 'TRUE');
   assert.equal(settings.SCHOOL_NAME, 'โรงเรียนวัดเสาหิน');
@@ -98,7 +98,7 @@ test('รันซ้ำได้อย่างปลอดภัย: ไม่
   assert.equal(h.env.props.get('PASSWORD_PEPPER'), pepper);
 
   h.newExecution();
-  assert.equal(h.gas.dbAll_('SchoolSettings').length, 23);
+  assert.equal(h.gas.dbAll_('SchoolSettings').length, 24);
   assert.equal(h.gas.dbGet_('SchoolSettings', 'SCHOOL_ADDRESS').Value, 'ต.ตัวอย่าง อ.ตัวอย่าง', 'ไม่เขียนทับค่าที่ตั้งไว้');
   assert.equal(h.gas.dbGet_('Students', saved.StudentId).FirstName, 'สมชาย');
   const verify = plain(h.gas.auditVerifyChain_());
@@ -204,11 +204,11 @@ test('เมนูใน Google Sheets: แสดงเมนู ยืนยั
   assert.ok(h.sheet('Users'));
   const last = h.env.alerts[h.env.alerts.length - 1];
   assert.equal(last.title, 'ผลการติดตั้งฐานข้อมูล');
-  assert.match(last.message, /สร้างชีตใหม่ 15 ชีต/);
+  assert.match(last.message, /สร้างชีตใหม่ 16 ชีต/);
 
   h.newExecution();
   h.gas.menuVerifyAuditLog();
-  assert.match(h.env.alerts[h.env.alerts.length - 1].message, /^ถูกต้อง: ประวัติการใช้งาน 25 รายการ/);
+  assert.match(h.env.alerts[h.env.alerts.length - 1].message, /^ถูกต้อง: ประวัติการใช้งาน 26 รายการ/);
 });
 
 test('เมนูแสดงข้อผิดพลาดเป็นข้อความภาษาไทยแทนการหยุดทำงาน', () => {
