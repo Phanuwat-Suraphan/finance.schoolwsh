@@ -81,6 +81,7 @@ function apiActions_() {
     // บัญชีการเงินของนักเรียน
     'ledger.students': { roles: FINANCE_VIEW, write: false, handler: ledgerStudents_ },
     'ledger.student': { roles: FINANCE_VIEW, write: false, handler: ledgerStudent_ },
+    'arrears.summary': { roles: FINANCE_VIEW, write: false, handler: arrearsSummary_ },
     // คำขออนุมัติ: เจ้าหน้าที่ยื่น/ถอน ผู้อำนวยการพิจารณา
     'approvals.list': { roles: FINANCE_VIEW, write: false, handler: approvalsList_ },
     'approvals.decide': { roles: DIRECTOR, write: true, handler: approvalsDecide_ },

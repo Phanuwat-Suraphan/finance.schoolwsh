@@ -49,6 +49,7 @@ const EXPECTED = {
   'adjustments.revoke': ['DIRECTOR'],
   'ledger.students': ['FINANCE', 'DIRECTOR'],
   'ledger.student': ['FINANCE', 'DIRECTOR'],
+  'arrears.summary': ['FINANCE', 'DIRECTOR'],
   'approvals.list': ['FINANCE', 'DIRECTOR'],
   'approvals.decide': ['DIRECTOR'],
   'approvals.withdraw': ['FINANCE'],
@@ -185,6 +186,7 @@ test('คำตอบทุกคำสั่งส่งผ่าน google.scr
   call('approvals.list', { status: 'ALL' }, tokens.DIRECTOR);
   call('receipts.books', {}, tokens.DIRECTOR);
   call('payments.list', {}, tokens.DIRECTOR);
+  call('arrears.summary', {}, tokens.DIRECTOR);
   call('receipts.book', { bookId: reg.bookId }, tokens.DIRECTOR);
   const paidId = createdPay.data.payment.paymentId;
   call('payments.get', { paymentId: paidId }, tokens.DIRECTOR);
