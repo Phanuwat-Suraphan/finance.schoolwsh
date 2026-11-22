@@ -488,6 +488,29 @@ async function main() {
       'หน้าพิมพ์ยอดค้าง: มีหัวรายงานชื่อโรงเรียนและวันที่ ซ่อนเมนูและปุ่ม');
     await shot(p, '30-arrears-print');
     await p.emulateMedia({ media: 'screen' });
+
+    // ------------------------------------------------------------------ ระยะที่ 7: Dashboard รายงาน และปิดยอด
+    await nav(p, 'ภาพรวม (Dashboard)');
+    await p.locator('.meter-row').first().waitFor();
+    const dash = await p.evaluate(() => App.api('dashboard.summary', {}));
+    const arr = await p.evaluate(() => App.api('arrears.summary', {}));
+    check(dash.totals.outstandingSatang === arr.school.currentSatang && dash.priorOutstandingSatang === arr.school.priorSatang,
+      'Dashboard: ยอดค้างปีนี้และยอดค้างจากปีก่อนตรงกับรายงานยอดค้าง (คำนวณแยกกันสองทาง)');
+    const dashOwing = await p.evaluate((x) => formatSatang_(x, true), dash.totals.outstandingSatang);
+    check(await p.locator('.stat', { hasText: 'ยอดค้างชำระ' }).getByText(dashOwing).isVisible(), 'Dashboard แสดงยอดค้างชำระ ' + dashOwing);
+    await p.locator('.meter-row').first().hover();
+    await p.locator('.viz-tip:not(.hidden)').waitFor();
+    check(true, 'ชี้ที่แท่งความคืบหน้าแล้วแสดงตัวเลขรายละเอียด');
+    await p.mouse.move(5, 5);
+    await shot(p, '32-dashboard', true);
+    await nav(p, 'รายงานและปิดยอด');
+    check((await p.locator('.report-item').count()) === 9, 'หน้ารายงานมีรายงานครบ 9 ฉบับ');
+    await shot(p, '33-reports');
+    await p.getByRole('button', { name: /รายงานการรับเงินประจำวัน/ }).click();
+    await p.getByText('ร่าง – ยังไม่ปิดยอด').waitFor();
+    check(await p.getByText(/มีคำขอยกเลิกหรือแก้ไขใบเสร็จของวันนี้รอผู้อำนวยการพิจารณา/).isVisible() &&
+      (await p.getByRole('button', { name: 'ปิดยอดวันนี้' }).count()) === 0, 'ยังปิดยอดไม่ได้ ระหว่างมีคำขอยกเลิก/แก้ไขใบเสร็จของวันนั้นรอพิจารณา');
+    await shot(p, '34-daily-report-pending', true);
     await desk.context.close();
 
     // ------------------------------------------------------------------ มือถือ: ผู้อำนวยการ
@@ -575,7 +598,99 @@ async function main() {
     check(true, 'หลังผู้อำนวยการพิจารณา ยอดค้างทั้งหมดเหลือ 900.00 บาท (อนุมัติลดหย่อน 100 บาท)');
     check(await noHorizontalScroll(m), 'มือถือ: หน้ายอดค้างชำระไม่มีแถบเลื่อนแนวนอน');
     await shot(m, '31-mobile-arrears');
+    await m.getByRole('button', { name: 'เปิดเมนู' }).click();
+    await m.locator('.nav-item', { hasText: 'ภาพรวม (Dashboard)' }).click();
+    await m.locator('.meter-row').first().waitFor();
+    check(await noHorizontalScroll(m), 'มือถือ: หน้า Dashboard ไม่มีแถบเลื่อนแนวนอน');
+    await shot(m, '35-mobile-dashboard');
     await mobile.context.close();
+
+    // ------------------------------------------------------------------ คอมพิวเตอร์: ปิดยอดประจำวัน และหนังสือแจ้งยอด
+    const fin2 = await openApp(browser, h, { viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2, locale: 'th-TH' });
+    const f = fin2.page;
+    await f.getByRole('button', { name: 'เข้าสู่ระบบ', exact: true }).waitFor();
+    await login(f, 'finance1', 'Somjai2569pw');
+    await f.getByRole('heading', { name: /สวัสดี/ }).waitFor();
+    await nav(f, 'รายงานและปิดยอด');
+    await f.getByRole('button', { name: /รายงานการรับเงินประจำวัน/ }).click();
+    await f.getByRole('button', { name: 'ปิดยอดวันนี้' }).click();
+    const cm = f.locator('.modal');
+    await cm.getByRole('button', { name: 'ปิดยอด', exact: true }).click();
+    await cm.getByText(/กรุณาติ๊กยืนยันว่า/).waitFor();
+    check(true, 'ปิดยอดต้องติ๊กยืนยันว่าตรวจนับเงินและสำเนาใบเสร็จแล้ว');
+    await cm.getByLabel('ตรวจนับเงินและสำเนาใบเสร็จตรงกับรายงานนี้แล้ว').check();
+    await cm.getByRole('button', { name: 'ปิดยอด', exact: true }).click();
+    await toast(f, 'ปิดยอดวันที่ 21 พฤศจิกายน 2569 เรียบร้อยแล้ว');
+    await f.locator('.status-line .badge', { hasText: 'ปิดยอดแล้ว' }).waitFor();
+    check((await f.getByText('ร่าง – ยังไม่ปิดยอด').count()) === 0 && await f.locator('.doc-foot', { hasText: /รหัสตรวจสอบ [0-9A-F]{4}-/ }).isVisible(),
+      'หลังปิดยอด รายงานไม่มีคำว่า "ร่าง" และพิมพ์รหัสตรวจสอบท้ายเอกสาร');
+    await shot(f, '36-daily-closed', true);
+    await f.emulateMedia({ media: 'print' });
+    check(!(await f.locator('.sidebar').isVisible()) && !(await f.locator('.page-head').isVisible()) && await f.locator('.doc').isVisible(),
+      'หน้าพิมพ์รายงานประจำวัน: เหลือเฉพาะเอกสาร ไม่มีเมนูและปุ่ม');
+    await shot(f, '37-daily-print', true);
+    await f.emulateMedia({ media: 'screen' });
+
+    // บันทึกรับเงินในวันที่ปิดยอดแล้วไม่ได้ (ผ่านหน้าเว็บตามปกติ)
+    const owing = (await f.evaluate(() => App.api('ledger.students', {}))).rows.filter((r) => r.outstandingSatang > 0)[0];
+    await nav(f, 'รับชำระเงิน');
+    await f.getByLabel('ค้นหานักเรียน').fill(owing.studentNo);
+    await f.locator('.data-table tbody tr', { hasText: owing.studentNo }).click();
+    await f.getByRole('button', { name: /^รับเต็มยอดค้าง/ }).click();
+    await f.locator('#confirm-receipt').check();
+    await f.getByRole('button', { name: 'บันทึกการรับเงิน' }).click();
+    await f.getByText(/21 พฤศจิกายน 2569 ปิดยอดแล้ว จึงบันทึกรับเงินในวันนั้นไม่ได้/).waitFor();
+    check(true, 'บันทึกรับเงินในวันที่ปิดยอดแล้ว ระบบไม่รับ และแจ้งให้ผู้อำนวยการเปิดยอดใหม่');
+
+    await nav(f, 'รายงานและปิดยอด');
+    await f.getByRole('button', { name: /เอกสารแจ้งยอดเรียกเก็บเงิน/ }).click();
+    const notices = await f.evaluate(() => App.api('reports.notices', {}));
+    await f.locator('.doc-letter').first().waitFor();
+    check((await f.locator('.doc-letter').count()) === notices.notices.length && notices.notices.length > 0,
+      'หนังสือแจ้งยอด 1 ฉบับต่อนักเรียนที่มียอดค้าง (' + notices.notices.length + ' ฉบับ)');
+    check(await f.locator('.doc-letter').first().getByText('จึงเรียนมาเพื่อโปรดทราบ', { exact: false }).isVisible(), 'หนังสือแจ้งยอดใช้ถ้อยคำแจ้งให้ทราบ');
+    await shot(f, '38-notices');
+
+    // ------------------------------------------------------------------ คอมพิวเตอร์: ผู้ดูแลระบบ สำรองและกู้คืนข้อมูล
+    const adm = await openApp(browser, h, { viewport: { width: 1280, height: 860 }, deviceScaleFactor: 2, locale: 'th-TH' });
+    const a = adm.page;
+    await a.getByRole('button', { name: 'เข้าสู่ระบบ', exact: true }).waitFor();
+    await login(a, 'admin', h.admin.password);
+    await a.locator('.stat', { hasText: 'สำรองข้อมูลล่าสุด' }).waitFor();
+    check(await a.getByText('ยังไม่เคยสำรอง').isVisible(), 'หน้าแรกผู้ดูแลระบบแสดงสถานะการสำรองข้อมูล');
+    const adminDash = await a.evaluate(() => App.api('dashboard.summary', {}).then(() => 'allowed', (e) => e.code));
+    check(adminDash === 'FORBIDDEN', 'ผู้ดูแลระบบเรียกข้อมูล Dashboard การเงินโดยตรง ถูก Server ปฏิเสธ');
+    await nav(a, 'สำรองและกู้คืนข้อมูล');
+    await a.getByRole('button', { name: 'สำรองข้อมูลตอนนี้' }).click();
+    await a.locator('.modal').getByRole('button', { name: 'สำรองข้อมูล', exact: true }).click();
+    await toast(a, 'สำรองข้อมูลเรียบร้อยแล้ว');
+    await a.locator('.data-table tbody tr', { hasText: 'สำรองเอง' }).waitFor();
+    check(true, 'สำรองข้อมูลตอนนี้ แล้วไฟล์ใหม่แสดงในรายการ');
+    await shot(a, '39-backups');
+    await a.locator('.data-table tbody tr', { hasText: 'สำรองเอง' }).getByRole('button', { name: 'กู้คืน…' }).click();
+    const rm = a.locator('.modal');
+    await rm.getByText('ผลกระทบของการกู้คืน').waitFor();
+    check(await rm.getByRole('button', { name: 'กู้คืนข้อมูล', exact: true }).isDisabled(), 'ปุ่มกู้คืนกดไม่ได้จนกว่าจะพิมพ์คำยืนยัน');
+    await rm.getByLabel(/^พิมพ์คำว่า/).fill('กู้คืนข้อมูล');
+    // ภาพสำหรับคู่มือ: ปิดข้อความแจ้งเตือนที่บังปุ่ม และขยายจอให้เห็นหน้าต่างยืนยันทั้งหน้า
+    for (const t of await a.locator('.toast').all()) await t.click().catch(() => {});
+    await a.setViewportSize({ width: 1280, height: 1500 });
+    await rm.locator('.modal-body').evaluate((el) => { el.scrollTop = 0; });
+    await shot(a, '40-restore-confirm');
+    await a.setViewportSize({ width: 1280, height: 860 });
+    await rm.getByRole('button', { name: 'กู้คืนข้อมูล', exact: true }).click();
+    await a.getByRole('heading', { name: 'กู้คืนข้อมูลเรียบร้อย' }).waitFor();
+    await a.locator('.modal').getByRole('button', { name: 'เข้าสู่ระบบใหม่' }).click();
+    await a.getByRole('button', { name: 'เข้าสู่ระบบ', exact: true }).waitFor();
+    check(true, 'กู้คืนข้อมูลแล้วออกจากระบบ ต้องเข้าสู่ระบบใหม่');
+    const finSession = await f.evaluate(() => App.api('auth.me', {}).then(() => 'ok', (e) => e.code));
+    check(finSession === 'UNAUTHENTICATED', 'หลังกู้คืน ผู้ใช้อื่นที่เปิดหน้าเว็บค้างไว้ต้องเข้าสู่ระบบใหม่');
+    await login(a, 'admin', h.admin.password);
+    await nav(a, 'ประวัติการใช้งาน');
+    await a.locator('.data-table tbody tr', { hasText: 'กู้คืนข้อมูล' }).first().waitFor();
+    check(true, 'ประวัติการใช้งานบันทึกการกู้คืนข้อมูล');
+    await adm.context.close();
+    await fin2.context.close();
   } finally {
     await browser.close();
   }

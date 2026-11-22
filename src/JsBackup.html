@@ -73,7 +73,7 @@
         return;
       }
       body.appendChild(h('h3', { style: { margin: '14px 0 6px' }, text: 'ผลกระทบของการกู้คืน' }));
-      body.appendChild(h('div', { class: 'alert alert-error' },
+      body.appendChild(h('div', { class: 'alert ' + (p.since.total ? 'alert-error' : 'alert-info') },
         h('div', { class: 'strong', text: p.since.total
           ? 'ข้อมูลที่บันทึกหลังเวลาสำรอง ' + p.since.total + ' รายการจะไม่อยู่ในระบบหลังกู้คืน'
           : 'ไม่พบการบันทึกข้อมูลหลังเวลาสำรอง' }),
