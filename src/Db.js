@@ -215,8 +215,11 @@ function dbTable_(name) {
   return table;
 }
 
-/** อ่านชีตใดก็ได้ตาม SCHEMA (ใช้กับฐานข้อมูล และกับไฟล์สำรองตอนกู้คืน) ไม่เก็บแคช */
-function readTable_(name, sheet) {
+/**
+ * อ่านชีตใดก็ได้ตาม SCHEMA (ใช้กับฐานข้อมูล และกับไฟล์สำรองตอนกู้คืน) ไม่เก็บแคช
+ * allowMissing: รายชื่อคอลัมน์ที่ยอมให้ไม่มีได้ (อ่านเป็นค่าว่าง) ใช้เฉพาะตอนกู้คืนไฟล์สำรองรุ่นเก่า
+ */
+function readTable_(name, sheet, allowMissing) {
   const schema = getSchema_(name);
   const lastRow = sheet.getLastRow();
   const lastCol = sheet.getLastColumn();
@@ -226,7 +229,7 @@ function readTable_(name, sheet) {
   const values = sheet.getRange(1, 1, lastRow, lastCol).getValues();
   const header = values[0].map(normalizeHeaderCell_);
   const colIndex = buildColumnIndex_(header, schema);
-  const missing = missingColumns_(colIndex, schema);
+  const missing = missingColumns_(colIndex, schema).filter(function (c) { return !allowMissing || allowMissing.indexOf(c) === -1; });
   if (missing.length) {
     throw appError_(ERROR_CODES.INTERNAL, 'ชีต "' + name + '" ขาดคอลัมน์ ' + missing.join(', ') + ' ' + SETUP_HINT_);
   }

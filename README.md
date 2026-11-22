@@ -23,7 +23,10 @@
 
 | คอมพิวเตอร์ | มือถือ |
 |---|---|
-| ![ยอดค้างชำระ](docs/screenshots/30-arrears.jpg) | ![ยอดค้างชำระบนมือถือ](docs/screenshots/31-mobile-arrears.jpg) |
+| ![ภาพรวม (Dashboard)](docs/screenshots/32-dashboard.jpg) | ![Dashboard บนมือถือ](docs/screenshots/35-mobile-dashboard.jpg) |
+| ![รายงานรับเงินประจำวันที่ปิดยอดแล้ว](docs/screenshots/36-daily-closed.jpg) | ![ยอดค้างชำระบนมือถือ](docs/screenshots/31-mobile-arrears.jpg) |
+| ![หนังสือแจ้งยอดถึงผู้ปกครอง](docs/screenshots/38-notices.jpg) | ![สำรองและกู้คืนข้อมูล](docs/screenshots/39-backups.jpg) |
+| ![ยอดค้างชำระ](docs/screenshots/30-arrears.jpg) | ![ตรวจผลกระทบก่อนกู้คืนข้อมูล](docs/screenshots/40-restore-confirm.jpg) |
 | ![รับชำระเงิน](docs/screenshots/19-payment-form.jpg) | ![คำขออนุมัติบนมือถือ](docs/screenshots/24-mobile-approvals.jpg) |
 | ![ตารางเลขที่ใบเสร็จ](docs/screenshots/27-receipt-grid.jpg) | ![ตารางเลขที่ใบเสร็จบนมือถือ](docs/screenshots/29-mobile-receipt-grid.jpg) |
 | ![อัตราและการเรียกเก็บ](docs/screenshots/17-fees.jpg) | ![รายการเรียกเก็บบนมือถือ](docs/screenshots/25-mobile-fee-detail.jpg) |
@@ -41,15 +44,15 @@
 | 4 | ระบบเรียกเก็บและรับชำระ (อัตรา เรียกเก็บ ลดหย่อน/ยกเว้นพร้อมการอนุมัติ รับเงินตามใบเสร็จจริง และส่วนแกนของทะเบียนเล่มใบเสร็จ) | ✅ เสร็จ |
 | 5 | ระบบทะเบียนคุมใบเสร็จเต็มรูปแบบ (ยกเลิกเลขที่ ยกเลิกใบเสร็จ แก้รายการบันทึกผิด ปิดเล่ม เลขขาดช่วง ตารางเลขที่ทุกใบ) | ✅ เสร็จ |
 | 6 | ระบบยอดค้าง (รายนักเรียน รายห้อง รายชั้น ทั้งโรงเรียน ยอดค้างสะสมจากปีก่อน และหน้าพิมพ์) | ✅ เสร็จ |
-| 7 | Dashboard รายงาน และสำรอง/กู้คืนข้อมูล | ⏳ ถัดไป |
-| 8 | ทดสอบทั้งระบบ คู่มือ และ checklist ก่อนใช้งานจริง | |
+| 7 | Dashboard รายงานแบบทางการ 9 ฉบับ (พิมพ์/บันทึก PDF) ปิดยอดประจำวัน หนังสือแจ้งยอด และสำรอง/กู้คืนข้อมูล | ✅ เสร็จ |
+| 8 | ทดสอบทั้งระบบ คู่มือ และ checklist ก่อนใช้งานจริง | ⏳ ถัดไป |
 
 ## เอกสาร
 
 | เอกสาร | เนื้อหา |
 |---|---|
 | [docs/INSTALL.md](docs/INSTALL.md) | วิธีติดตั้งและทดสอบทีละขั้นตอน |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | การตัดสินใจแทนเจ้าหน้าที่การเงิน 36 ข้อ และแบบตรวจยืนยันก่อนใช้งานจริง |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | การตัดสินใจแทนเจ้าหน้าที่การเงิน 44 ข้อ และแบบตรวจยืนยันก่อนใช้งานจริง |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | สถาปัตยกรรม โครงสร้างข้อมูล ความปลอดภัย และแผนการพัฒนา |
 
 ## สำหรับผู้พัฒนา

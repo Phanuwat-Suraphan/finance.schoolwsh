@@ -31,6 +31,16 @@ const BACKUP_KIND_LABELS = Object.freeze({ MANUAL: 'สำรองเอง', A
 const RESTORE_CONFIRM_TEXT = 'กู้คืนข้อมูล';
 const BACKUP_SPREADSHEET_MIME = 'application/vnd.google-apps.spreadsheet';
 
+/**
+ * คอลัมน์ที่ยอมให้ไฟล์สำรองรุ่นเก่าไม่มีได้ (กู้คืนเป็นค่าว่าง) แยกตามชีต
+ * ตอนนี้ยังไม่มี: ทุกคอลัมน์ต้องมีครบ เพราะการกู้คืนจำนวนเงินหรือสถานะเป็นค่าว่างเป็นอันตราย
+ * ถ้าระบบรุ่นต่อไปเพิ่มคอลัมน์ที่ว่างได้ ให้เพิ่มชื่อไว้ที่นี่หลังตรวจแล้วว่าปลอดภัย เช่น { Payments: ['NewColumn'] }
+ */
+function restoreOptionalColumns_(name) {
+  const map = {};
+  return map[name] || [];
+}
+
 /** ชีตที่ไม่กู้คืน (คงข้อมูลปัจจุบันไว้) */
 function restoreExcludedSheets_() {
   return [SHEETS.USERS, SHEETS.AUDIT_LOGS];
@@ -87,7 +97,8 @@ function existingBackupFolder_() {
 function backupFolder_() {
   const existing = existingBackupFolder_();
   if (existing) return existing;
-  const folder = DriveApp.createFolder(BACKUP_FOLDER_NAME);
+  // ต่อท้ายด้วยชื่อไฟล์ฐานข้อมูล เพื่อแยกโฟลเดอร์ของระบบจริงกับชุดทดสอบที่ติดตั้งด้วยบัญชีเดียวกัน
+  const folder = DriveApp.createFolder(BACKUP_FOLDER_NAME + ' – ' + db_().getName());
   folder.setDescription('ไฟล์สำรองข้อมูลของระบบบริหารจัดเก็บเงินบำรุงการศึกษา ห้ามแชร์โฟลเดอร์นี้ให้ผู้อื่น');
   PropertiesService.getScriptProperties().setProperty(PROP_KEYS.BACKUP_FOLDER_ID, folder.getId());
   return folder;
@@ -160,7 +171,7 @@ function requireBackupFile_(fileId) {
     if (parents.next().getId() === folder.getId()) inFolder = true;
   }
   if (!inFolder || file.isTrashed() || file.getMimeType() !== BACKUP_SPREADSHEET_MIME) {
-    throw appError_(ERROR_CODES.FORBIDDEN, 'กู้คืนได้เฉพาะไฟล์ Google Sheets ที่อยู่ในโฟลเดอร์ "' + BACKUP_FOLDER_NAME + '" เท่านั้น');
+    throw appError_(ERROR_CODES.FORBIDDEN, 'กู้คืนได้เฉพาะไฟล์ Google Sheets ที่อยู่ในโฟลเดอร์ "' + folder.getName() + '" ของระบบนี้เท่านั้น');
   }
   return file;
 }
@@ -383,10 +394,13 @@ function readBackupData_(file) {
     if (!sheet) { problems.push('ไม่พบชีต "' + name + '" ในไฟล์สำรอง'); return; }
     const schema = getSchema_(name);
     const header = readHeader_(sheet);
-    const missing = missingColumns_(buildColumnIndex_(header, schema), schema);
+    const optional = restoreOptionalColumns_(name);
+    const missingAll = missingColumns_(buildColumnIndex_(header, schema), schema);
+    const missing = missingAll.filter(function (c) { return optional.indexOf(c) === -1; });
     if (missing.length) { problems.push('ชีต "' + name + '" ในไฟล์สำรองขาดคอลัมน์ ' + missing.join(', ')); return; }
+    if (missingAll.length) warnings.push('ชีต "' + name + '" ในไฟล์สำรองไม่มีคอลัมน์ ' + missingAll.join(', ') + ' (กู้คืนเป็นค่าว่าง)');
     try {
-      const t = readTable_(name, sheet);
+      const t = readTable_(name, sheet, optional);
       if (t.duplicateIds.length) {
         problems.push('ชีต "' + name + '" ในไฟล์สำรองมีรหัสซ้ำ: ' + t.duplicateIds.slice(0, 3).join(', '));
         return;
@@ -428,6 +442,20 @@ function changesSince_(fileId, createdAt) {
       return { entity: k, label: auditEntityLabel_(k), count: counts[k] };
     }),
   };
+}
+
+/** คอลัมน์ที่ไม่ใช่ของระบบในชีตปัจจุบัน (ข้อมูลในคอลัมน์เหล่านี้จะถูกล้างเมื่อกู้คืน จึงแจ้งเตือนก่อน) */
+function liveExtraColumns_() {
+  const out = [];
+  const ss = db_();
+  restoreSheetNames_().forEach(function (name) {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) return;
+    const schema = getSchema_(name);
+    const extra = readHeader_(sheet).filter(function (h) { return h !== '' && !schema.columnMap[h]; });
+    if (extra.length) out.push({ name: name, label: schema.label, columns: extra });
+  });
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +537,7 @@ function backupsRestorePreview_(ctx, payload) {
       return { name: n, label: SCHEMA[n].label, backupRows: data.tables[n] ? data.tables[n].length : null, currentRows: dbAll_(n).length };
     }),
     excludedSheets: restoreExcludedSheets_().map(function (n) { return { name: n, label: SCHEMA[n].label }; }),
+    extraColumns: liveExtraColumns_(),
     since: changesSince_(file.getId(), createdAt),
     confirmText: RESTORE_CONFIRM_TEXT,
   };

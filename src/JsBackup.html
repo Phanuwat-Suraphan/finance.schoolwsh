@@ -68,6 +68,9 @@
         h('tr', null, h('th', { text: 'ประเภท' }), h('td', { text: p.backup.kindLabel + (p.backup.createdBy ? ' โดย ' + p.backup.createdBy : '') })))));
       p.problems.forEach(function (x) { body.appendChild(h('div', { class: 'alert alert-error', text: x })); });
       p.warnings.forEach(function (x) { body.appendChild(h('div', { class: 'alert alert-warning', text: x })); });
+      (p.extraColumns || []).forEach(function (x) {
+        body.appendChild(h('div', { class: 'alert alert-warning', text: 'ชีต "' + x.label + '" มีคอลัมน์ที่ระบบไม่ได้ใช้ (' + x.columns.join(', ') + ') ข้อมูลในคอลัมน์นี้จะถูกล้างเมื่อกู้คืน ถ้าต้องการเก็บไว้ ให้คัดลอกออกก่อน' }));
+      });
       if (!p.valid) {
         body.appendChild(h('p', { class: 'strong', text: 'ไฟล์นี้ใช้กู้คืนไม่ได้ ข้อมูลในระบบไม่ถูกเปลี่ยนแปลง' }));
         return;
@@ -154,7 +157,7 @@
           empty: 'ยังไม่มีไฟล์สำรอง กด "สำรองข้อมูลตอนนี้" เพื่อสร้างไฟล์แรก',
         });
         return h('div', null,
-          App.pageHead('สำรองและกู้คืนข้อมูล', 'ไฟล์สำรองเก็บใน Google Drive ของบัญชีเจ้าของระบบ (โฟลเดอร์ "' + (d.folder ? d.folder.name : 'สำรองข้อมูล ระบบเงินบำรุงการศึกษา') + '") ห้ามแชร์โฟลเดอร์นี้ให้ผู้อื่น', actions),
+          App.pageHead('สำรองและกู้คืนข้อมูล', 'ไฟล์สำรองเก็บใน Google Drive ของบัญชีเจ้าของระบบ' + (d.folder ? ' (โฟลเดอร์ "' + d.folder.name + '")' : ' (ระบบสร้างโฟลเดอร์ให้เมื่อสำรองครั้งแรก)') + ' ห้ามแชร์โฟลเดอร์นี้ให้ผู้อื่น', actions),
           alerts.length ? h('div', { class: 'stack', style: { marginBottom: '14px' } }, alerts) : null,
           h('div', { class: 'grid-cards' },
             App.statCard('สำรองล่าสุด', last ? App.fmt.datetime(last.createdAt) : 'ยังไม่เคยสำรอง', last ? last.name : 'กดสำรองข้อมูลตอนนี้', last ? 'success' : 'danger'),

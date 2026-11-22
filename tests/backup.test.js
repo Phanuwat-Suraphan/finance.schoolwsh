@@ -63,7 +63,7 @@ test('สำรองข้อมูลตอนนี้: ไฟล์ใหม
   assert.equal(info.some((r) => String(r[1]).includes('PEPPER')), false);
 
   const list = h.ok('backups.list', {}, t.admin);
-  assert.equal(list.folder.name, 'สำรองข้อมูล ระบบเงินบำรุงการศึกษา');
+  assert.equal(list.folder.name, 'สำรองข้อมูล ระบบเงินบำรุงการศึกษา – ฐานข้อมูลทดสอบ', 'ชื่อโฟลเดอร์มีชื่อไฟล์ฐานข้อมูลต่อท้าย');
   assert.deepEqual(list.backups.map((x) => x.fileId), [b.fileId]);
   assert.equal(list.backups[0].rows > 0, true);
   assert.equal(list.retention, 60);
@@ -208,8 +208,15 @@ test('กู้คืนไม่ได้จากไฟล์นอกโฟ�
   assert.equal(t.rows('Payments').length, 1);
   assert.equal(h.api('auth.me', {}, t.fin).ok, true, 'ไม่มีใครถูกออกจากระบบ');
 
+  // คอลัมน์ที่ผู้ใช้เพิ่มเองในชีตจริง: แจ้งเตือนก่อนกู้คืนว่าข้อมูลในคอลัมน์นั้นจะถูกล้าง
+  const live = h.sheet('Students');
+  live._rawSet(1, live.getLastColumn() + 1, 'หมายเหตุครู');
+  const good = h.ok('backups.create', {}, t.admin).backup;
+  const warn = h.ok('backups.restorePreview', { fileId: good.fileId }, t.admin);
+  assert.deepEqual(warn.extraColumns, [{ name: 'Students', label: 'นักเรียน', columns: ['หมายเหตุครู'] }]);
+
   // ไฟล์ในถังขยะใช้ไม่ได้
   h.gas.DriveApp.getFileById(backup.fileId).setTrashed(true);
   assert.equal(h.api('backups.restorePreview', { fileId: backup.fileId }, t.admin).error.code, 'FORBIDDEN');
-  assert.equal(h.ok('backups.list', {}, t.admin).backups.length, 0);
+  assert.equal(h.ok('backups.list', {}, t.admin).backups.length, 1, 'เหลือเฉพาะไฟล์ที่ไม่อยู่ในถังขยะ');
 });
